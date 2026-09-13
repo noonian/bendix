@@ -22,6 +22,14 @@ keywords elsewhere are variables, numbers are exact.
 
 (simplify [:+ [:sin :x] [:sin :x]])
 ;; => {:result [:* 2 [:sin :x]] ...}            ; sin x is an opaque atom
+
+(require '[bendix.rules :as rules])
+
+(simplify [:+ [:+ [:+ :a [:expt [:sin :x] 2]] :b] [:expt [:cos :x] 2]] {:rules rules/trig})
+;; => {:result [:+ :a :b 1] ...}                ; the pair is found inside any sum
+
+(simplify [:- 1 [:expt [:cos :x] 2]] {:rules rules/trig})
+;; => {:result [:expt [:sin :x] 2] ...}
 ```
 
 The commutative-ring identities are not rewrite rules. A polynomial
@@ -33,15 +41,18 @@ makes a = −1), reported as a contradiction when it is one (x = x + 1),
 and otherwise kept as an assumption. Everything outside the ring is a
 rule: `(simplify t {:rules [...]})` takes cromulent rewrites, and
 `:dev? true` checks the normal forms after every rule application and
-throws naming the first unsound rule. `:cost` is a cromulent cost
-function; the default is AST size, and what "simplest" means is yours
-to decide.
+throws naming the first unsound rule. `bendix.rules/trig` holds the
+first *normal-form rule*: `sin²u + cos²u = 1` applied as reduction of
+a class's polynomial, so it finds the pair however the sum or product
+is arranged, and `bendix.rules/normal-form-rule` builds more of them.
+`:cost` is a cromulent cost function; the default is AST size, and
+what "simplest" means is yours to decide.
 
 ## Running
 
 ```
 clojure -M:test     jolt -M:test     jolt test      # the suite, either runtime
-clojure -M:bench    jolt -M:bench                   # experiment 2 and simplifier timings
+clojure -M:bench    jolt -M:bench                   # experiments 2, 4, 5 and simplifier timings
 ```
 
 [IDEA.md](IDEA.md) is the design and status.

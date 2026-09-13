@@ -69,7 +69,11 @@
                        (gen/map atom-gen (gen/fmap #(/ % 5) gen/small-integer))))
 
 (defn eval-term
-  "Evaluate a term over the ring vocabulary under env."
+  "Evaluate a term over the ring vocabulary under env, exactly. :sin
+  and :cos are evaluated in the unit-circle model: for the argument's
+  value v, sin = 2v/(1+v²) and cos = (1−v²)/(1+v²), a rational point
+  on the circle, so sin² + cos² = 1 holds exactly and the identity
+  rules can be checked by strict equality."
   [t env]
   (cond
     (number? t) t
@@ -82,7 +86,9 @@
               :- (if (= 1 (count vs)) (-' (first vs)) (reduce -' vs))
               :neg (-' (first vs))
               :expt (reduce *' 1 (repeat (second args) (first vs)))
-              :/ (/ (first vs) (second vs))))))
+              :/ (/ (first vs) (second vs))
+              :sin (let [v (first vs)] (/ (*' 2 v) (+' 1 (*' v v))))
+              :cos (let [v (first vs)] (/ (-' 1 (*' v v)) (+' 1 (*' v v))))))))
 
 (defn- canonical? [q]
   (and (every? (complement zero?) (vals q))

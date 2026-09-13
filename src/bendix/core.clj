@@ -46,9 +46,21 @@
         (eg/rebuild (first (eg/union g nid id)))))))
 
 (defn materialize-all
-  "Materialize every class's normal form."
+  "Materialize every class's normal form: one extractor for the
+  renderings, every term added, one union each, one rebuild. Adding
+  to a dirty e-graph is what the runner's apply phase does too."
   [g]
-  (reduce materialize g (eg/roots g)))
+  (let [best (ex/extractor g)
+        render (fn [a] (if (keyword? a) a (:term (best a))))]
+    (eg/rebuild
+     (reduce (fn [g r]
+               (let [d (an/canonical g (eg/data g r :poly))]
+                 (if-not (an/polynomial? d)
+                   g
+                   (let [[g nid] (eg/add g (poly/->term d render))]
+                     (first (eg/union g nid r))))))
+             g
+             (eg/roots g)))))
 
 (def ^:private runner-keys
   [:iter-limit :node-limit :time-limit-ms :scheduler :match-limit :ban-length :timeline?])

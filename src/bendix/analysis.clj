@@ -89,14 +89,24 @@
           (> (poly/term-count result) too-big) :too-big
           :else result)))))
 
-(defn- forms
+(defn- the-make [g]
+  (:make (some #(when (= :poly (:name %)) %) (:analyses g))))
+
+(defn threshold
+  "The :too-big term-count threshold of g's polynomial analysis."
+  [g]
+  (:too-big (some #(when (= :poly (:name %)) %) (:analyses g))))
+
+(defn forms
   "The distinct canonical polynomial forms the class of r derives:
-  one per ring node, plus the stored data."
-  [g make r]
-  (into #{}
-        (comp (map #(canonical g %)) (filter polynomial?))
-        (cons (eg/data g r :poly)
-              (map #(make g (eg/canonicalize g %) r) (:nodes (eg/eclass g r))))))
+  one per ring node, plus the stored data. More than one means the
+  e-graph asserts an equation the ring cannot see."
+  [g r]
+  (let [make (the-make g)]
+    (into #{}
+          (comp (map #(canonical g %)) (filter polynomial?))
+          (cons (eg/data g r :poly)
+                (map #(make g (eg/canonicalize g %) r) (:nodes (eg/eclass g r)))))))
 
 (defn- solve
   "Every equation between two forms of one class that is linear in a
@@ -113,15 +123,13 @@
             g
             (for [i (range (count fs)), j (range (inc i) (count fs))] [(nth fs i) (nth fs j)]))))
 
-(defn- the-make [g]
-  (:make (some #(when (= :poly (:name %)) %) (:analyses g))))
-
 (defn poly-analysis
   "The polynomial normal-form analysis. Options: :too-big, the term
   count past which a normal form is abandoned (default 200)."
   ([] (poly-analysis {}))
   ([{:keys [too-big] :or {too-big 200}}]
    {:name :poly
+    :too-big too-big
     :make (fn [g node id]
             (cond
               (exact? node) (poly/constant node)
@@ -158,11 +166,10 @@
   is :conflict. Under a ring-only rule set any such class means an
   unsound rule fired; under other rule sets it is expected."
   [g]
-  (let [make (the-make g)]
-    (some (fn [r]
-            (if (= :conflict (eg/data g r :poly))
-              {:class r :conflict true}
-              (let [fs (forms g make r)]
-                (when (< 1 (count fs))
-                  {:class r :forms fs}))))
-          (eg/roots g))))
+  (some (fn [r]
+          (if (= :conflict (eg/data g r :poly))
+            {:class r :conflict true}
+            (let [fs (forms g r)]
+              (when (< 1 (count fs))
+                {:class r :forms fs}))))
+        (eg/roots g)))

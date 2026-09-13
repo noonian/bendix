@@ -13,7 +13,9 @@
   Coefficient arithmetic promotes to bignums; nothing here overflows.
 
   Atoms are keywords (variables) or integers (e-class ids of opaque
-  classes, see bendix.analysis); `map-atoms` renames them.")
+  classes, see bendix.analysis); anything else (a placeholder for a
+  node a rule is about to create, see bendix.rules) orders by its
+  printed form. `map-atoms` renames them.")
 
 ;; ---------------------------------------------------------------------------
 ;; construction and arithmetic
@@ -75,6 +77,27 @@
          (odd? n) (recur (mul acc base) (if (= 1 n) base (mul base base)) (quot n 2))
          :else (recur acc (mul base base) (quot n 2)))))))
 
+(defn reduce-square
+  "p modulo a² − q: every a^e becomes a^(e mod 2)·q^(e div 2), so a
+  appears at most linearly. With a limit, nil as soon as an
+  intermediate result has more terms than the limit. This is
+  reduction by the single-polynomial Gröbner basis {a² − q}; for
+  q = 1 − c² it is the Pythagorean identity."
+  ([p a q] (reduce-square p a q nil))
+  ([p a q limit]
+   (let [ok? (fn [r] (or (nil? limit) (<= (count r) limit)))]
+     (reduce-kv (fn [acc m c]
+                  (when acc
+                    (let [e (get m a 0)]
+                      (if (< e 2)
+                        (add-term acc m c)
+                        (let [m' (if (odd? e) (assoc m a 1) (dissoc m a))
+                              qk (expt q (quot e 2) limit)
+                              acc' (when qk (add acc (scale (mul {m' 1} qk) c)))]
+                          (when (and acc' (ok? acc')) acc'))))))
+                zero
+                p))))
+
 (defn sum [ps] (reduce add zero ps))
 
 (defn product [ps] (reduce mul (constant 1) ps))
@@ -116,7 +139,9 @@
 ;; ordering
 
 (defn- atom-key [a]
-  (if (keyword? a) [0 (str a)] [1 a]))
+  (cond (keyword? a) [0 (str a)]
+        (integer? a) [1 a]
+        :else [2 (pr-str a)]))
 
 (defn- monomial-key
   "Graded lexicographic: higher total degree first, then the sorted
