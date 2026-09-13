@@ -16,32 +16,32 @@
   set that holds it."
   (:require [bendix.analysis :as an]
             [bendix.poly :as poly]
+            [bendix.term :as bt]
             [cromulent.core :as eg]
-            [cromulent.rewrite :as rw]))
+            [cromulent.rewrite :as rw]
+            [cromulent.term :as term]))
 
 ;; ---------------------------------------------------------------------------
 ;; normal-form rules
 
 (defn- id-var [id] (symbol (str "?" id)))
 
-(defn- arg-var [u] (symbol (str "?u" u)))
-
 (defn render
   "p as a pattern plus the bindings it needs. A variable atom renders
-  as itself; an opaque class id as ?id bound to id; a placeholder
-  atom [op u], a node the graph may not hold yet, as [op ?u<u>] with
-  ?u<u> bound to the argument class u. Returns [pattern bindings]."
+  as itself, a class id as ?id bound to that id, and a placeholder as
+  the same node with every class id so replaced. Returns
+  [pattern bindings]."
   [p]
-  (let [atoms (poly/atoms p)
-        bindings (into {}
-                       (keep (fn [a]
-                               (cond (integer? a) [(id-var a) a]
-                                     (vector? a) [(arg-var (nth a 1)) (nth a 1)]
-                                     :else nil)))
-                       atoms)
+  (let [ids (into #{}
+                  (mapcat (fn [a]
+                            (cond (bt/class-id? a) [a]
+                                  (bt/placeholder? a) (bt/class-ids a)
+                                  :else nil)))
+                  (poly/atoms p))
+        bindings (into {} (map (fn [id] [(id-var id) id])) ids)
         pattern (poly/->term p (fn [a]
-                                 (cond (integer? a) (id-var a)
-                                       (vector? a) [(nth a 0) (arg-var (nth a 1))]
+                                 (cond (bt/class-id? a) (id-var a)
+                                       (bt/placeholder? a) (bt/map-class-ids id-var a)
                                        :else a)))]
     [pattern bindings]))
 
@@ -73,14 +73,15 @@
   placeholder [:sin u] or [:cos u]."
   [g p]
   (let [roles (for [a (poly/atoms p)
-                    :when (integer? a)
-                    n (:nodes (eg/eclass g a))
-                    :when (and (vector? n) (= 2 (count n)) (contains? #{:sin :cos} (nth n 0)))]
-                [(eg/find g (nth n 1)) (nth n 0) a])
+                    :when (bt/class-id? a)
+                    n (bt/nodes-with g a #{:sin :cos})
+                    :when (= 1 (term/arity n))]
+                [(term/child n 0) (term/operator n) a])
         pairs (reduce (fn [m [u op a]] (assoc-in m [u op] a)) {} roles)]
     (into {}
           (map (fn [[u {:keys [sin cos]}]]
-                 [u {:sin (or sin [:sin u]) :cos (or cos [:cos u])}]))
+                 [u {:sin (or sin (bt/placeholder :sin [u]))
+                     :cos (or cos (bt/placeholder :cos [u]))}]))
           pairs)))
 
 (defn- one-minus-square [b]

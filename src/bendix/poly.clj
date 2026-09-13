@@ -12,9 +12,9 @@
   smallest form converge.
   Coefficient arithmetic promotes to bignums; nothing here overflows.
 
-  Atoms are keywords (variables) or integers (e-class ids of opaque
-  classes, see bendix.analysis); anything else (a placeholder for a
-  node a rule is about to create, see bendix.rules) orders by its
+  Atoms are opaque here; bendix.term says what they mean (a
+  variable, an e-class id, a placeholder). This namespace only orders
+  them: keywords first, then integers, then anything else by its
   printed form. `map-atoms` renames them.")
 
 ;; ---------------------------------------------------------------------------

@@ -10,6 +10,7 @@
   throw naming the rule), :too-big, and the runner's limits."
   (:require [bendix.analysis :as an]
             [bendix.poly :as poly]
+            [bendix.term :as bt]
             [cromulent.core :as eg]
             [cromulent.extract :as ex]
             [cromulent.rewrite :as rw]
@@ -41,7 +42,7 @@
     (if-not (an/polynomial? d)
       g
       (let [best (ex/extractor g)
-            t (poly/->term d (fn [a] (if (keyword? a) a (:term (best a)))))
+            t (poly/->term d (fn [a] (if (bt/variable? a) a (:term (best a)))))
             [g nid] (eg/add g t)]
         (eg/rebuild (first (eg/union g nid id)))))))
 
@@ -51,7 +52,7 @@
   to a dirty e-graph is what the runner's apply phase does too."
   [g]
   (let [best (ex/extractor g)
-        render (fn [a] (if (keyword? a) a (:term (best a))))]
+        render (fn [a] (if (bt/variable? a) a (:term (best a))))]
     (eg/rebuild
      (reduce (fn [g r]
                (let [d (an/canonical g (eg/data g r :poly))]

@@ -33,11 +33,9 @@
   pair can be sound, which is what `inconsistency` checks in dev
   mode."
   (:require [bendix.poly :as poly]
+            [bendix.term :as bt]
             [cromulent.core :as eg]
             [cromulent.term :as term]))
-
-(defn- exact? [x]
-  (or (integer? x) (ratio? x)))
 
 (defn atom? [d] (and (map? d) (contains? d :atom)))
 
@@ -48,7 +46,7 @@
   [g d]
   (cond
     (atom? d) {:atom (eg/find g (:atom d))}
-    (polynomial? d) (poly/map-atoms #(if (keyword? %) % (eg/find g %)) d)
+    (polynomial? d) (poly/map-atoms #(if (bt/variable? %) % (eg/find g %)) d)
     :else d))
 
 (defn- as-poly [d]
@@ -116,7 +114,7 @@
   (let [fs (into [] (comp (map #(canonical g %)) (filter polynomial?) (distinct)) forms)]
     (reduce (fn [g [p q]]
               (if-let [[v value] (poly/linear-in-one-atom (poly/sub p q))]
-                (let [[g vid] (if (keyword? v) (eg/add g v) [g v])
+                (let [[g vid] (if (bt/variable? v) (eg/add g v) [g v])
                       [g cid] (eg/add g value)]
                   (first (eg/union g vid cid)))
                 g))
@@ -132,8 +130,8 @@
     :too-big too-big
     :make (fn [g node id]
             (cond
-              (exact? node) (poly/constant node)
-              (keyword? node) (poly/variable node)
+              (bt/constant? node) (poly/constant node)
+              (bt/variable? node) (poly/variable node)
               (term/compound? node) (let [r (ring-op g node too-big)]
                                       (if (= ::opaque r) {:atom id} r))
               :else {:atom id}))

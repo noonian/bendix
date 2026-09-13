@@ -118,9 +118,10 @@ visits every root whose `:poly` data is a polynomial and asks a
 class is worth. Its right-hand side is each `p'` rendered by
 `bendix.poly/->term` as a **pattern** over the atoms: a variable
 renders as itself, an opaque class id as the pattern variable `?<id>`
-bound to that id, and a node the graph may not hold yet (the cosine
-of an argument that so far has only a sine) as a pattern over the
-argument's class, `[:cos ?u<id>]`. The match carries that pattern as
+bound to that id, and a **placeholder**, a term over class ids for a
+node the graph may not hold yet (the cosine of an argument that so
+far has only a sine, `[:cos u]`), as that term with each class id
+replaced by its variable, `[:cos ?u<id>]`. The match carries that pattern as
 its own `:rhs`, a cromulent extension made for this (a match may
 supply the right-hand side), so one rule says a different thing about
 every class. The runner instantiates and unions as for any rule; the
@@ -370,9 +371,8 @@ small, optional piece; Emmy's test corpus is a resource.
   extracted) always, never, or only at the root.
 - Whether `:D` belongs in the term language (differentiation as
   equality) or is a separate operation that calls into the engine.
-  The design above assumes the former because it is the more
-  interesting demonstration; the numeric oracle must then treat `:D`
-  nodes as unevaluable and skip them.
+  Decided (section 10, item 3): the former; the oracle for it is a
+  reference differentiator whose result must land in the same class.
 
 ## Appendix: term format trade-offs
 
@@ -436,24 +436,70 @@ programmers, the canonical form *is* the primary syntax.
 
 ## 10. Next: milestone 2
 
-Milestone 1 built the ring fragment; the first step of milestone 2
-built normal-form rules and `pythagoras` (section "Status" below).
-Next:
+Milestone 1 built the ring fragment; the first steps of milestone 2
+built normal-form rules, `pythagoras`, and the term seam in the rules
+(section "Status" below). Next, in this order:
 
-1. `powers` and `exp-log` as ordinary rules; `derivative` with the
-   `no-D` cost.
-2. The sign lattice (section 4) and `:assume`, so conditional rules
+1. **`powers`**, a normal-form rule over monomials. The analysis
+   already folds non-negative integer exponents, so `x²·x³`, `(x²)³`
+   and `x⁰` never need a rule; what remains are the powers it holds
+   as atoms, a negative constant exponent (`x⁻²`) or a non-constant
+   one (`xⁿ`). In a monomial, every atom that is `[:expt B E]` for
+   one base class `B`, together with `B` itself when it is a factor,
+   combines into one placeholder `[:expt B ΣE]`: the integer parts
+   summed as a number, the class parts as a `:+` over their classes,
+   and a resulting non-negative integer exponent is then folded by
+   the analysis on its own. The rule fires when two or more factors
+   combine. `x^a·x^b = x^(a+b)` holds for the principal branch
+   whenever `x ≠ 0`, so the rule is sound wherever both sides are
+   defined, the convention of the numeric oracle (section 7).
+   `(x^m)^n = x^(mn)` is not unconditional (`((−1)²)^½ ≠ (−1)¹`) and
+   waits for an `integer` analysis; the analysis already covers the
+   non-negative integer case.
+2. **`exp-log`, the unconditional part.** `exp` of a class whose
+   polynomial has more than one term, or a coefficient other than 1,
+   is the product of powers of `exp` of its monomials
+   (`exp(2x + y) = exp(x)²·exp(y)`): a normal-form rule on the
+   argument's data, rendered as a placeholder product, both
+   directions available to extraction as always.
+   `[:log [:exp ?x]] = ?x` is a pattern rule, since the nesting is a
+   node. `exp 0 = 1` and `log 1 = 0` belong to `const` (item 5).
+   `exp(log x) = x` and `log(ab) = log a + log b` are conditional and
+   wait for the sign lattice (item 4).
+3. **`derivative`.** `:D` stays in the term language (section 9,
+   decided): differentiation is equality saturation with a cost that
+   refuses `:D`. Three layers. (a) A normal-form rule: for `[:D U x]`
+   with `x` a variable and `U`'s data a polynomial `p` over atoms,
+   `Σ_a ∂p/∂a · D(a, x)`, where `D(x, x) = 1`, `D(y, x) = 0` for
+   another variable, and `[:D a x]` is a placeholder for an opaque
+   atom `a`; `bendix.poly/partial` is the new arithmetic. So the
+   derivative of the ring part is computed, not searched, and the
+   sub-sum problem never arises for it. (b) Pattern rules for the
+   atoms, the chain rule at each: `sin`, `cos`, `exp`, `log`, and
+   `[:expt ?u ?n]` for a constant `n` the analysis does not fold,
+   guarded by "`n`'s data is a constant". An atom with no rule keeps
+   its `:D`. (c) `no-D`, a cost under which a `:D` node costs a large
+   exact constant, so a result that still holds one says so through
+   its cost; and `(derivative t x)`, a front door over `simplify`
+   that reports it. Oracle: a reference differentiator of a dozen
+   lines in the tests; the reference and the engine's result are
+   added to one e-graph under the same rules and must land in one
+   class, and over the ring fragment they are also compared
+   numerically at random rational points (the unit-circle model of
+   section 3 does not differentiate like sine, so trig derivatives
+   are checked only the first way).
+4. The sign lattice (section 4) and `:assume`, so conditional rules
    fire soundly; `:assuming` in results stops being empty.
-3. `const` for non-ring operators the analysis can evaluate exactly
-   (`abs`, integer `gcd`); the polynomial analysis already folds ring
-   constants.
-4. More trig. Parity (`sin(−u) = −sin u`) needs the negated argument
+5. `const` for non-ring operators the analysis can evaluate exactly
+   (`abs`, integer `gcd`, `exp 0`, `log 1`); the polynomial analysis
+   already folds ring constants.
+6. More trig. Parity (`sin(−u) = −sin u`) needs the negated argument
    as a class; double angle and sum formulas need a numeric model
    that carries the half-angle parameter through argument arithmetic
    (section 3). The alternative to measure against: fold the
    Pythagorean identity into the analysis itself, so no node is ever
    added for it and the index does the merging.
-5. Rational-function normal forms, or division under a nonzero
+7. Rational-function normal forms, or division under a nonzero
    analysis: open.
 
 ## Status
@@ -524,5 +570,18 @@ runtimes the same way:
 - `bench/` — experiments 4 and 5 (tables and verdict in
   ../design/ac-problem.md): the pair reached inside a sum of 100
   atoms at 327 nodes in three iterations, every workload row reached.
+
+The term seam (2026-09-13, the former item 1 of section 10):
+`bendix.term` is the CAS's vocabulary (`variable?`, `constant?`,
+`class-id?`, `placeholder?`, `placeholder`, `class-ids`,
+`map-class-ids`, `nodes-with`, `node-with`), used by the analysis, the
+simplifier and the rules in place of type tests; the rules read nodes
+only through `cromulent.term` (which gained `child`); a placeholder is
+any node over class ids, nested allowed, rendered by walking it, and
+one variable `?<id>` names a class id wherever it occurs.
+`bendix.poly` only orders atoms. Tests: the vocabulary, placeholders
+with several children, reading a merged class in node order, and a
+nested placeholder through `render` (the suite is 34 tests, 161
+assertions).
 
 Not yet: everything in section 10, other syntaxes, explanations.

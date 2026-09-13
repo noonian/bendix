@@ -29,9 +29,12 @@
 (deftest render
   (is (= [[:+ [:expt '?4 2] '?7 1] {'?4 4 '?7 7}]
          (rules/render (p/add (p/add (p/expt (p/variable 4) 2) (p/variable 7)) (p/constant 1)))))
-  (is (= [[:+ [:* -1 [:expt [:cos '?u9] 2]] 1] {'?u9 9}]
+  (is (= [[:+ [:* -1 [:expt [:cos '?9] 2]] 1] {'?9 9}]
          (rules/render (p/sub (p/constant 1) (p/expt (p/variable [:cos 9]) 2))))
-      "a placeholder renders as the node over the argument's class"))
+      "a placeholder renders as the node over the argument's class")
+  (is (= [[:* '?2 [:expt '?1 [:+ '?3 '?4]]] {'?1 1 '?2 2 '?3 3 '?4 4}]
+         (rules/render (p/mul (p/variable 2) (p/variable [:expt 1 [:+ 3 4]]))))
+      "a placeholder may have several children, nested"))
 
 (deftest textbook-trig
   (is (= 1 (simp [:+ s2 c2])))
