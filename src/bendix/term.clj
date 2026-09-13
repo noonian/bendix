@@ -10,8 +10,11 @@
     constant     an exact number                           2, 1/2
     class id     an integer naming an e-class; occurs only in
                  analysis data and placeholders, never in a term
-    placeholder  a node over class ids that the graph may not hold
-                 yet, which a rule renders as a pattern to create it
+    placeholder  a node the graph may not hold yet, over class
+                 references and constants, which a rule renders as a
+                 pattern to create it
+    class ref    {:class id} inside a placeholder, so that a constant
+                 leaf (an exponent, say) is not mistaken for an id
 
   An atom of a polynomial (bendix.poly) is a variable, a class id or
   a placeholder. Rules and analyses ask their questions here rather
@@ -46,25 +49,37 @@
 ;; ---------------------------------------------------------------------------
 ;; placeholders
 
+(defn class-ref
+  "A reference to the class id, as a placeholder leaf."
+  [id]
+  {:class id})
+
+(defn class-ref?
+  [x]
+  (and (map? x) (contains? x :class)))
+
 (defn placeholder
-  "The placeholder for the node op over the class ids."
-  [op ids]
-  (term/make op ids))
+  "The placeholder for the node op over its children: class
+  references, constants, or placeholders."
+  [op children]
+  (term/make op children))
 
 (defn class-ids
-  "Every class id a placeholder mentions, as a set."
+  "Every class id a placeholder refers to, as a set."
   [p]
-  (if (term/compound? p)
-    (into #{} (mapcat class-ids) (term/children p))
-    #{p}))
+  (cond
+    (term/compound? p) (into #{} (mapcat class-ids) (term/children p))
+    (class-ref? p) #{(:class p)}
+    :else #{}))
 
 (defn map-class-ids
-  "p with every class id replaced by (f id), placeholders inside
-  placeholders included."
+  "p with every class reference replaced by (f id), placeholders
+  inside placeholders included; constants stay."
   [f p]
-  (if (term/compound? p)
-    (term/map-children #(map-class-ids f %) p)
-    (f p)))
+  (cond
+    (term/compound? p) (term/map-children #(map-class-ids f %) p)
+    (class-ref? p) (f (:class p))
+    :else p))
 
 ;; ---------------------------------------------------------------------------
 ;; reading classes

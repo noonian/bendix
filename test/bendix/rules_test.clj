@@ -7,10 +7,29 @@
             [bendix.poly :as p]
             [bendix.poly-test :refer [eval-term]]
             [bendix.rules :as rules]
+            [bendix.term :as bt]
             [cromulent.check :as check]
-            [cromulent.core :as eg]))
+            [cromulent.core :as eg]
+            [cromulent.rewrite :as rw]))
 
 (defn- simp [t] (:result (simplify t {:rules rules/trig})))
+
+(def both (into rules/trig rules/powers))
+
+(defn- same-class?
+  "Do a and b land in one class when saturated together under rules?
+  The engine as its own oracle for results whose spelling may vary."
+  [rules a b]
+  (let [g (bx/egraph)
+        [g ia] (eg/add g a)
+        [g ib] (eg/add g b)
+        {:keys [egraph]} (rw/embiggen g rules {})]
+    (= (eg/find egraph ia) (eg/find egraph ib))))
+
+(defn- size [t] (if (vector? t) (reduce + 1 (map size (rest t))) 1))
+
+(defn- count-op [op t]
+  (if (vector? t) (reduce + (if (= op (first t)) 1 0) (map #(count-op op %) (rest t))) 0))
 
 (def s2 [:expt [:sin :x] 2])
 (def c2 [:expt [:cos :x] 2])
@@ -30,11 +49,13 @@
   (is (= [[:+ [:expt '?4 2] '?7 1] {'?4 4 '?7 7}]
          (rules/render (p/add (p/add (p/expt (p/variable 4) 2) (p/variable 7)) (p/constant 1)))))
   (is (= [[:+ [:* -1 [:expt [:cos '?9] 2]] 1] {'?9 9}]
-         (rules/render (p/sub (p/constant 1) (p/expt (p/variable [:cos 9]) 2))))
+         (rules/render (p/sub (p/constant 1) (p/expt (p/variable (bt/placeholder :cos [(bt/class-ref 9)])) 2))))
       "a placeholder renders as the node over the argument's class")
-  (is (= [[:* '?2 [:expt '?1 [:+ '?3 '?4]]] {'?1 1 '?2 2 '?3 3 '?4 4}]
-         (rules/render (p/mul (p/variable 2) (p/variable [:expt 1 [:+ 3 4]]))))
-      "a placeholder may have several children, nested"))
+  (is (= [[:* '?2 [:expt '?1 [:+ 2 '?3 '?4]]] {'?1 1 '?2 2 '?3 3 '?4 4}]
+         (rules/render (p/mul (p/variable 2)
+                              (p/variable (bt/placeholder :expt [(bt/class-ref 1)
+                                                                 (bt/placeholder :+ [2 (bt/class-ref 3) (bt/class-ref 4)])])))))
+      "a placeholder may have several children, nested, with constants"))
 
 (deftest textbook-trig
   (is (= 1 (simp [:+ s2 c2])))
@@ -92,6 +113,93 @@
     (is (some? (rules/trig-inconsistency g)) "2·sin x = sin x + cos x is an assumption outside the identity")))
 
 ;; ---------------------------------------------------------------------------
+;; powers
+
+(def xn [:expt :x :n])
+(def xm [:expt :x :m])
+
+(defn- simp-powers [t] (:result (simplify t {:rules rules/powers})))
+
+(deftest textbook-powers
+  (let [r (simp-powers [:* xn xm])]
+    (is (same-class? rules/powers r [:expt :x [:+ :n :m]]))
+    (is (= 1 (count-op :expt r)) "one power"))
+  (let [r (simp-powers [:* xn :x])]
+    (is (same-class? rules/powers r [:expt :x [:+ :n 1]]))
+    (is (= 1 (count-op :expt r))))
+  (is (= :x (simp-powers [:* [:expt :x -2] [:expt :x 3]])) "a negative constant exponent")
+  (is (= 1 (simp-powers [:* :x [:expt :x -1]])) "x · x⁻¹ = 1, the 0⁰ convention")
+  (is (= [:expt :x -2] (simp-powers [:* [:expt :x -1] [:expt :x -1]])))
+  (is (= :x (simp-powers [:* [:expt :x 1/2] [:expt :x 1/2]])) "rational exponents")
+  (let [r (simp-powers [:expt xn 2])]
+    (is (same-class? rules/powers r [:expt :x [:* 2 :n]]) "a power to an integer power")
+    (is (= 1 (count-op :expt r))))
+  (let [r (simp-powers [:* [:expt [:sin :x] :n] [:sin :x]])]
+    (is (same-class? rules/powers r [:expt [:sin :x] [:+ :n 1]]) "an opaque base"))
+  (let [r (simp-powers [:* [:expt [:+ :x 1] :n] [:expt [:+ :x 1] :m]])]
+    (is (same-class? rules/powers r [:expt [:+ :x 1] [:+ :n :m]]) "a compound base"))
+  (let [r (simp-powers [:* [:* :y xn] [:* xm :y]])]
+    (is (same-class? rules/powers r [:* [:expt :y 2] [:expt :x [:+ :n :m]]]) "the ring keeps y², the rule does x"))
+  (let [r (simp-powers [:+ [:+ :a [:* xn xm]] :b])]
+    (is (same-class? rules/powers r [:+ :a :b [:expt :x [:+ :n :m]]]) "inside a sum")
+    (is (= 1 (count-op :expt r))))
+  (let [r (simp-powers [:* [:expt :x 2] xn])]
+    (is (same-class? rules/powers r [:expt :x [:+ :n 2]]) "a folded square joins the symbolic power"))
+  (is (= [:* [:expt :x :n] [:expt :y :n]] (simp-powers [:* xn [:expt :y :n]])) "different bases stay")
+  (is (= xn (simp-powers xn)) "one power stays")
+  (is (= [:expt :x 3] (simp-powers [:* :x [:expt :x 2]])) "the ring alone: no rule needed"))
+
+(deftest powers-saturate-quickly
+  (let [{:keys [iterations stop-reason egraph]} (bx/saturate [:+ [:* xn xm] [:* [:expt :x -2] [:expt :x 3]]] {:rules rules/powers})]
+    (is (= :saturated stop-reason))
+    (is (<= iterations 3))
+    (is (empty? (check/violations egraph)))))
+
+(def pow-leaf-gen (gen/elements [:x :y 1 2 -1 [:sin :x]]))
+(def exponent-gen (gen/elements [:n :m -2 -1 0 1 2 3]))
+
+(def pow-term-gen
+  (gen/recursive-gen
+   (fn [inner]
+     (gen/one-of [(gen/tuple (gen/return :+) inner inner)
+                  (gen/tuple (gen/return :*) inner inner)
+                  (gen/tuple (gen/return :*) inner inner inner)
+                  (gen/tuple (gen/return :expt) inner exponent-gen)]))
+   pow-leaf-gen))
+
+(def rational-gen (gen/fmap #(/ % 5) gen/small-integer))
+(def pow-env-gen (gen/fmap (fn [[x y n m]] {:x x :y y :n n :m m})
+                           (gen/tuple rational-gen rational-gen (gen/choose -2 3) (gen/choose -2 3))))
+
+(defn- value
+  "eval-term, or ::undefined outside the domain."
+  [t env]
+  (try (eval-term t env)
+       (catch clojure.lang.ExceptionInfo e
+         (if (:undefined (ex-data e)) ::undefined (throw e)))))
+
+(deftest powers-preserve-value-where-defined
+  (let [res (tc/quick-check
+             200
+             (prop/for-all [t pow-term-gen, env pow-env-gen]
+               (let [{:keys [result stop cost]} (simplify t {:rules both :too-big 50})
+                     again (simplify result {:rules both :too-big 50})
+                     v (value t env)]
+                 (and (= :saturated stop)
+                      (or (= ::undefined v) (= v (value result env)))
+                      (<= (size result) (size t))
+                      (= cost (:cost again))))))]
+    (is (:pass? res) (pr-str res))))
+
+(deftest the-graph-behind-powers-is-well-formed
+  (let [res (tc/quick-check
+             100
+             (prop/for-all [t pow-term-gen]
+               (let [{:keys [egraph]} (bx/saturate t {:rules both :too-big 50})]
+                 (empty? (check/violations (bx/materialize-all egraph))))))]
+    (is (:pass? res) (pr-str res))))
+
+;; ---------------------------------------------------------------------------
 ;; experiment 4 as a property: O(n) nodes, whatever the arrangement
 
 (def atoms [:a :b :c :d :e :f])
@@ -136,8 +244,6 @@
 
 (def env-gen (gen/fmap #(merge {:x 0 :y 0} %)
                        (gen/map (gen/elements [:x :y]) (gen/fmap #(/ % 7) gen/small-integer))))
-
-(defn- size [t] (if (vector? t) (reduce + 1 (map size (rest t))) 1))
 
 (deftest simplify-with-trig-preserves-value-and-never-grows
   (let [res (tc/quick-check

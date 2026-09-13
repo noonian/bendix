@@ -30,6 +30,9 @@ keywords elsewhere are variables, numbers are exact.
 
 (simplify [:- 1 [:expt [:cos :x] 2]] {:rules rules/trig})
 ;; => {:result [:expt [:sin :x] 2] ...}
+
+(simplify [:* [:expt :x :n] [:* :x [:expt :x :m]]] {:rules rules/powers})
+;; => {:result [:expt :x [:+ :m :n 1]] ...}      ; one power per base, however the product is arranged
 ```
 
 The commutative-ring identities are not rewrite rules. A polynomial
@@ -44,7 +47,9 @@ rule: `(simplify t {:rules [...]})` takes cromulent rewrites, and
 throws naming the first unsound rule. `bendix.rules/trig` holds the
 first *normal-form rule*: `sin²u + cos²u = 1` applied as reduction of
 a class's polynomial, so it finds the pair however the sum or product
-is arranged, and `bendix.rules/normal-form-rule` builds more of them.
+is arranged; `bendix.rules/powers` combines the powers of one base
+inside any product the same way; `bendix.rules/normal-form-rule`
+builds more of them.
 `:cost` is a cromulent cost function; the default is AST size, and
 what "simplest" means is yours to decide.
 

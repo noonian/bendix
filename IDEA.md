@@ -74,6 +74,9 @@ them as rules would reintroduce the 3ⁿ blowup.
 
 - `powers`: `[:expt ?x 0] = 1`, `[:expt [:expt ?x ?m] ?n] = [:expt ?x [:* ?m ?n]]`
   (integer exponents only, unconditionally), `[:* [:expt ?x ?m] [:expt ?x ?n]] = [:expt ?x [:+ ?m ?n]]`.
+  Built as one normal-form rule over monomials (`combine-powers`,
+  section "Status"): the analysis already folds non-negative integer
+  exponents, so the rule handles the powers it holds as atoms.
 - `exp-log`: `[:exp [:log ?x]] = ?x` (needs `?x > 0`: conditional),
   `[:log [:* ?a ?b]] = [:+ [:log ?a] [:log ?b]]` (conditional), `[:exp [:+ ?a ?b]] = [:* [:exp ?a] [:exp ?b]]`.
 - `trig`: Pythagorean, double angle, sum/difference, parity.
@@ -307,6 +310,15 @@ difference between "wrong" and "right, given this assumption you can
 see" is the difference between a tool people trust and one they
 double-check by hand. Option 2 is the one to get right.
 
+One rule set is exempt by the convention every CAS shares, and the
+exemption is named here so it is not silent: `powers` combines
+exponents unconditionally (section 3), so `x · x⁻¹` becomes `1` and
+`x⁻² · x³` becomes `x`, defined at `x = 0` where the input was not,
+with `0⁰ = 1`. Division stays opaque (`[:/ :x :x]` is not `1`), so
+the exemption reaches only what is written as a power. When option 2
+exists, `x ≠ 0` from a power combination is the first assumption
+`:assuming` reports.
+
 ## 6. Cost functions: where "simplest" lives
 
 A saturated e-graph contains the expanded form, the factored form, and
@@ -371,7 +383,7 @@ small, optional piece; Emmy's test corpus is a resource.
   extracted) always, never, or only at the root.
 - Whether `:D` belongs in the term language (differentiation as
   equality) or is a separate operation that calls into the engine.
-  Decided (section 10, item 3): the former; the oracle for it is a
+  Decided (section 10, item 2): the former; the oracle for it is a
   reference differentiator whose result must land in the same class.
 
 ## Appendix: term format trade-offs
@@ -437,36 +449,20 @@ programmers, the canonical form *is* the primary syntax.
 ## 10. Next: milestone 2
 
 Milestone 1 built the ring fragment; the first steps of milestone 2
-built normal-form rules, `pythagoras`, and the term seam in the rules
-(section "Status" below). Next, in this order:
+built normal-form rules, `pythagoras`, the term seam in the rules and
+`powers` (section "Status" below). Next, in this order:
 
-1. **`powers`**, a normal-form rule over monomials. The analysis
-   already folds non-negative integer exponents, so `x²·x³`, `(x²)³`
-   and `x⁰` never need a rule; what remains are the powers it holds
-   as atoms, a negative constant exponent (`x⁻²`) or a non-constant
-   one (`xⁿ`). In a monomial, every atom that is `[:expt B E]` for
-   one base class `B`, together with `B` itself when it is a factor,
-   combines into one placeholder `[:expt B ΣE]`: the integer parts
-   summed as a number, the class parts as a `:+` over their classes,
-   and a resulting non-negative integer exponent is then folded by
-   the analysis on its own. The rule fires when two or more factors
-   combine. `x^a·x^b = x^(a+b)` holds for the principal branch
-   whenever `x ≠ 0`, so the rule is sound wherever both sides are
-   defined, the convention of the numeric oracle (section 7).
-   `(x^m)^n = x^(mn)` is not unconditional (`((−1)²)^½ ≠ (−1)¹`) and
-   waits for an `integer` analysis; the analysis already covers the
-   non-negative integer case.
-2. **`exp-log`, the unconditional part.** `exp` of a class whose
+1. **`exp-log`, the unconditional part.** `exp` of a class whose
    polynomial has more than one term, or a coefficient other than 1,
    is the product of powers of `exp` of its monomials
    (`exp(2x + y) = exp(x)²·exp(y)`): a normal-form rule on the
    argument's data, rendered as a placeholder product, both
    directions available to extraction as always.
    `[:log [:exp ?x]] = ?x` is a pattern rule, since the nesting is a
-   node. `exp 0 = 1` and `log 1 = 0` belong to `const` (item 5).
+   node. `exp 0 = 1` and `log 1 = 0` belong to `const` (item 4).
    `exp(log x) = x` and `log(ab) = log a + log b` are conditional and
-   wait for the sign lattice (item 4).
-3. **`derivative`.** `:D` stays in the term language (section 9,
+   wait for the sign lattice (item 3).
+2. **`derivative`.** `:D` stays in the term language (section 9,
    decided): differentiation is equality saturation with a cost that
    refuses `:D`. Three layers. (a) A normal-form rule: for `[:D U x]`
    with `x` a variable and `U`'s data a polynomial `p` over atoms,
@@ -488,18 +484,18 @@ built normal-form rules, `pythagoras`, and the term seam in the rules
    numerically at random rational points (the unit-circle model of
    section 3 does not differentiate like sine, so trig derivatives
    are checked only the first way).
-4. The sign lattice (section 4) and `:assume`, so conditional rules
+3. The sign lattice (section 4) and `:assume`, so conditional rules
    fire soundly; `:assuming` in results stops being empty.
-5. `const` for non-ring operators the analysis can evaluate exactly
+4. `const` for non-ring operators the analysis can evaluate exactly
    (`abs`, integer `gcd`, `exp 0`, `log 1`); the polynomial analysis
    already folds ring constants.
-6. More trig. Parity (`sin(−u) = −sin u`) needs the negated argument
+5. More trig. Parity (`sin(−u) = −sin u`) needs the negated argument
    as a class; double angle and sum formulas need a numeric model
    that carries the half-angle parameter through argument arithmetic
    (section 3). The alternative to measure against: fold the
    Pythagorean identity into the analysis itself, so no node is ever
    added for it and the index does the merging.
-7. Rational-function normal forms, or division under a nonzero
+6. Rational-function normal forms, or division under a nonzero
    analysis: open.
 
 ## Status
@@ -581,7 +577,30 @@ any node over class ids, nested allowed, rendered by walking it, and
 one variable `?<id>` names a class id wherever it occurs.
 `bendix.poly` only orders atoms. Tests: the vocabulary, placeholders
 with several children, reading a merged class in node order, and a
-nested placeholder through `render` (the suite is 34 tests, 161
-assertions).
+nested placeholder through `render`.
+
+`powers` (2026-09-13, the former item 1 of section 10):
+`combine-powers` is a normal-form rule over monomials. For every
+atom of a monomial it asks what power it is (`factor`: a variable or
+opaque atom is its own base to the first power; an `[:expt B E]` atom
+is `B` to `k + S`, `k` the constant part of `E`'s data and `S` the
+class of a non-constant exponent), groups factors by base, and where
+a base has two factors, or one power raised to an integer power,
+replaces them by one placeholder `[:expt B (k + Σ c·S)]`; a
+non-negative integer total is then folded by the analysis and the
+class merges through the index. Placeholders gained explicit class
+references (`bendix.term/class-ref`) so a constant can sit beside an
+id, and cromulent gained `lookup` for the class of a variable leaf.
+The domain convention is stated in section 5. Tests: fifteen
+textbook results (symbolic, negative, rational and nested exponents,
+opaque and compound bases, inside a sum, beside a folded square,
+different bases untouched), with the engine as its own oracle where
+the spelling of the exponent may vary (`same-class?`); saturation in
+three iterations; and the numeric oracle over random terms with
+symbolic and negative exponents under `trig` and `powers` together,
+where a point outside the input's domain is skipped: value preserved
+where defined, never grows, cost a fixpoint, graph well-formed. The
+suite is 38 tests, 188 assertions. `bench/`: four powers rows in
+experiment 5.
 
 Not yet: everything in section 10, other syntaxes, explanations.

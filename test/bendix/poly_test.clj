@@ -73,7 +73,10 @@
   and :cos are evaluated in the unit-circle model: for the argument's
   value v, sin = 2v/(1+v²) and cos = (1−v²)/(1+v²), a rational point
   on the circle, so sin² + cos² = 1 holds exactly and the identity
-  rules can be checked by strict equality."
+  rules can be checked by strict equality. An exponent must evaluate
+  to an integer; a negative power of zero, or a non-integer exponent,
+  throws ex-info with :undefined true, which a property treats as a
+  point outside the domain."
   [t env]
   (cond
     (number? t) t
@@ -85,7 +88,13 @@
               :* (reduce *' vs)
               :- (if (= 1 (count vs)) (-' (first vs)) (reduce -' vs))
               :neg (-' (first vs))
-              :expt (reduce *' 1 (repeat (second args) (first vs)))
+              :expt (let [b (first vs), e (second vs)]
+                      (cond
+                        (not (integer? e)) (throw (ex-info "non-integer exponent" {:undefined true :exponent e}))
+                        (neg? e) (if (zero? b)
+                                   (throw (ex-info "negative power of zero" {:undefined true}))
+                                   (/ 1 (reduce *' 1 (repeat (- e) b))))
+                        :else (reduce *' 1 (repeat e b))))
               :/ (/ (first vs) (second vs))
               :sin (let [v (first vs)] (/ (*' 2 v) (+' 1 (*' v v))))
               :cos (let [v (first vs)] (/ (-' 1 (*' v v)) (+' 1 (*' v v))))))))

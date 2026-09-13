@@ -17,11 +17,14 @@
   (is (not (bt/placeholder? 7))))
 
 (deftest placeholders
-  (let [p (bt/placeholder :expt [3 [:+ 4 5]])]
-    (is (= [:expt 3 [:+ 4 5]] p))
-    (is (= #{3 4 5} (bt/class-ids p)))
-    (is (= [:expt "3" [:+ "4" "5"]] (bt/map-class-ids str p)))
-    (is (= [:sin 9] (bt/placeholder :sin [9])))))
+  (let [p (bt/placeholder :expt [(bt/class-ref 3) (bt/placeholder :+ [2 (bt/class-ref 4)])])]
+    (is (= [:expt {:class 3} [:+ 2 {:class 4}]] p))
+    (is (= #{3 4} (bt/class-ids p)) "the constant 2 is not an id")
+    (is (= [:expt "3" [:+ 2 "4"]] (bt/map-class-ids str p)))
+    (is (= [:sin {:class 9}] (bt/placeholder :sin [(bt/class-ref 9)])))
+    (is (bt/placeholder? p))
+    (is (bt/class-ref? (bt/class-ref 3)))
+    (is (not (bt/class-ref? 3)))))
 
 (deftest reading-classes
   (let [g (bx/egraph)

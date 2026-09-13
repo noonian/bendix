@@ -132,10 +132,18 @@
    ["(sin2+cos2)^3" [:expt [:+ s2 c2] 3] 1]
    ["sin4-cos4" [:- [:expt [:sin :x] 4] [:expt [:cos :x] 4]] #{[:+ [:* -2 c2] 1] [:+ [:* 2 s2] -1]}]
    ["sin2(x+y)+cos2(y+x)" [:+ [:expt [:sin [:+ :x :y]] 2] [:expt [:cos [:+ :y :x]] 2]] 1]
-   ["(2x+3x)sin2+5x cos2" [:+ [:* [:+ [:* 2 :x] [:* 3 :x]] s2] [:* [:* 5 :x] c2]] [:* 5 :x]]])
+   ["(2x+3x)sin2+5x cos2" [:+ [:* [:+ [:* 2 :x] [:* 3 :x]] s2] [:* [:* 5 :x] c2]] [:* 5 :x]]
+   ["x^n x^m" [:* [:expt :x :n] [:expt :x :m]] #{[:expt :x [:+ :n :m]] [:expt :x [:+ :m :n]]}]
+   ["x^-2 x^3" [:* [:expt :x -2] [:expt :x 3]] :x]
+   ["a + x^n x^m + b" [:+ [:+ :a [:* [:expt :x :n] [:expt :x :m]]] :b]
+    #{[:+ :a :b [:expt :x [:+ :n :m]]] [:+ :a :b [:expt :x [:+ :m :n]]]}]
+   ["(x^n)^2 sin2 + (x^n)^2 cos2" [:+ [:* [:expt [:expt :x :n] 2] s2] [:* [:expt [:expt :x :n] 2] c2]]
+    #{[:expt :x [:* 2 :n]] [:expt :x [:* :n 2]]}]])
+
+(def all-rules (into rules/trig rules/powers))
 
 (defn workload-row [[label t expected]]
-  (let [[ms r] (timed #(simplified t rules/trig {}))
+  (let [[ms r] (timed #(simplified t all-rules {}))
         g (:egraph r)
         ok? (if (set? expected) (contains? expected (:result r)) (= expected (:result r)))]
     {:fixture (str "wl " label) :n (:iterations r) :ms ms
