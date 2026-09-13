@@ -15,7 +15,10 @@
   every argument u, in both elimination orders; `trig` is the rule
   set that holds it. `combine-powers` is the second: in every
   monomial, the factors that are powers of one base become one
-  power; `powers` holds it."
+  power; `powers` holds it. `combine-exp` is its mirror image: in
+  every monomial, the factors that are powers of exponentials become
+  one exponential of the sum of their arguments; `exp-log` holds it
+  with the pattern rule `log-of-exp`."
   (:require [bendix.analysis :as an]
             [bendix.poly :as poly]
             [bendix.term :as bt]
@@ -50,19 +53,22 @@
 (defn normal-form-rule
   "A rule whose left-hand side is f, (fn [g id p] polys): the other
   polynomials the class id, whose canonical form is p, is worth. f
-  sees only classes whose data is a polynomial and may return nil.
-  Each polynomial becomes one match carrying its rendering as :rhs."
+  sees every class whose data is a polynomial, and every opaque class
+  as its unit polynomial {{id 1} 1}, and may return nil. Each
+  polynomial becomes one match carrying its rendering as :rhs."
   [name f]
   (rw/rule name
            (fn [g]
              (into []
                    (mapcat (fn [r]
-                             (let [d (an/canonical g (eg/data g r :poly))]
-                               (when (an/polynomial? d)
+                             (let [d (an/canonical g (eg/data g r :poly))
+                                   p (cond (an/polynomial? d) d
+                                           (an/atom? d) (poly/variable (:atom d)))]
+                               (when p
                                  (map (fn [p']
                                         (let [[pattern bindings] (render p')]
                                           {:class r :bindings bindings :rhs pattern}))
-                                      (distinct (f g r d)))))))
+                                      (distinct (f g r p)))))))
                    (eg/roots g)))
            nil))
 
@@ -196,6 +202,77 @@
 (def powers
   "The powers rule set."
   [combine-powers])
+
+;; ---------------------------------------------------------------------------
+;; exp-log
+
+(defn- exp-factor
+  "When the atom a of a monomial is a power of an exponential, that
+  is, `factor` finds a base whose class holds [:exp u]: {:u u :k k
+  :sym S} for exp(u)^(k + S). Else nil."
+  [g a]
+  (let [{:keys [base k sym]} (factor g a)]
+    (when-let [n (bt/node-with g base :exp)]
+      (when (= 1 (term/arity n))
+        {:u (term/child n 0) :k k :sym sym}))))
+
+(defn- scaled
+  "The placeholder for coeff · u, coeff a constant or a placeholder: u
+  itself when coeff is 1."
+  [coeff u]
+  (if (= 1 coeff) (bt/class-ref u) (bt/placeholder :* [coeff (bt/class-ref u)])))
+
+(defn- collect-monomial
+  "m with its exponential factors collected into one exponential of
+  the sum of their scaled arguments, or nil when m holds none, or
+  exactly one to the first power."
+  [g m]
+  (let [fs (keep (fn [[a e]] (when-let [f (exp-factor g a)] (assoc f :atom a :e e))) m)
+        lone? (and (= 1 (count fs))
+                   (let [f (nth fs 0)] (and (= 1 (:e f)) (= 1 (:k f)) (nil? (:sym f)))))]
+    (when (and (seq fs) (not lone?))
+      (let [by-u (reduce (fn [acc {:keys [u k sym e]}]
+                           (cond-> (update-in acc [u :k] (fnil +' 0) (*' k e))
+                             sym (update-in [u :syms sym] (fnil +' 0) e)))
+                         {}
+                         fs)
+            terms (keep (fn [[u {:keys [k syms]}]]
+                          (let [coeff (exponent-placeholder k (or syms {}))]
+                            (when-not (= 0 coeff) (scaled coeff u))))
+                        (sort-by key by-u))
+            arg (case (count terms)
+                  0 0
+                  1 (nth terms 0)
+                  (bt/placeholder :+ (vec terms)))]
+        (assoc (reduce dissoc m (map :atom fs)) (bt/placeholder :exp [arg]) 1)))))
+
+(defn exp-forms
+  "p with every monomial's exponential factors collected, when that
+  changes anything: the polynomial rewrite behind `combine-exp`."
+  [g _ p]
+  (let [p' (reduce-kv (fn [acc m c] (poly/add acc {(or (collect-monomial g m) m) c}))
+                      poly/zero
+                      p)]
+    (when (not= p' p) [p'])))
+
+(def combine-exp
+  "exp(a)·exp(b) = exp(a + b) and exp(a)^n = exp(n·a), inside every
+  monomial, for whatever exponent the factors carry: the exponential
+  factors of a monomial become one exponential of the sum of their
+  scaled arguments, which the analysis then normalizes. Sound on the
+  reals wherever the input is defined, exp being never zero; exp 0
+  folds to 1 in the analysis."
+  (normal-form-rule "combine-exp" exp-forms))
+
+(def log-of-exp
+  "log(exp x) = x."
+  (rw/rule "log-of-exp" '[:log [:exp ?x]] '?x))
+
+(def exp-log
+  "The exp-log rule set, its unconditional part: exp(log x) = x and
+  log(ab) = log a + log b wait for the sign lattice (IDEA.md
+  section 5)."
+  [combine-exp log-of-exp])
 
 ;; ---------------------------------------------------------------------------
 ;; the oracle for this rule set

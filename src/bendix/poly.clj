@@ -15,7 +15,8 @@
   Atoms are opaque here; bendix.term says what they mean (a
   variable, an e-class id, a placeholder). This namespace only orders
   them: keywords first, then integers, then anything else by its
-  printed form. `map-atoms` renames them.")
+  printed form. `map-atoms` renames them; `substitute` replaces them
+  by polynomials.")
 
 ;; ---------------------------------------------------------------------------
 ;; construction and arithmetic
@@ -122,6 +123,26 @@
                (add-term acc (reduce-kv (fn [m' a e] (merge-with + m' {(f a) e})) {} m) c))
              zero
              p))
+
+(defn substitute
+  "p with every atom that subst maps replaced by the polynomial it
+  maps to; other atoms stay. With a limit, nil as soon as an
+  intermediate result has more terms than the limit."
+  ([p subst] (substitute p subst nil))
+  ([p subst limit]
+   (let [ok? (fn [q] (or (nil? limit) (<= (count q) limit)))]
+     (reduce-kv (fn [acc m c]
+                  (let [q (reduce-kv (fn [q a e]
+                                       (let [r (get subst a)
+                                             pe (if (nil? r) {{a e} 1} (expt r e limit))
+                                             q' (when pe (mul q pe))]
+                                         (if (and q' (ok? q')) q' (reduced nil))))
+                                     (constant 1)
+                                     m)
+                        acc' (when q (add acc (scale q c)))]
+                    (if (and acc' (ok? acc')) acc' (reduced nil))))
+                zero
+                p))))
 
 (defn evaluate
   "The value of p under env, a map from atom to number."

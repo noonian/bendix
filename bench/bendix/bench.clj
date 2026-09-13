@@ -1,9 +1,10 @@
 (ns bendix.bench
-  "Experiments 2, 4 and 5 of ../design/ac-problem.md and simplifier
+  "Experiments 2, 4, 5 and 6 of ../design/ac-problem.md and simplifier
   timings, run the same way on both runtimes:
 
      clojure -M:bench        jolt -M:bench"
-  (:require [bendix.core :as bx]
+  (:require [bendix.analysis :as an]
+            [bendix.core :as bx]
             [bendix.rules :as rules]
             [cromulent.core :as eg]
             [cromulent.extract :as ex]
@@ -138,17 +139,48 @@
    ["a + x^n x^m + b" [:+ [:+ :a [:* [:expt :x :n] [:expt :x :m]]] :b]
     #{[:+ :a :b [:expt :x [:+ :n :m]]] [:+ :a :b [:expt :x [:+ :m :n]]]}]
    ["(x^n)^2 sin2 + (x^n)^2 cos2" [:+ [:* [:expt [:expt :x :n] 2] s2] [:* [:expt [:expt :x :n] 2] c2]]
-    #{[:expt :x [:* 2 :n]] [:expt :x [:* :n 2]]}]])
+    #{[:expt :x [:* 2 :n]] [:expt :x [:* :n 2]]}]
+   ["e^x e^y" [:* [:exp :x] [:exp :y]] [:exp [:+ :x :y]]]
+   ["e^(x+y) e^-y" [:* [:exp [:+ :x :y]] [:exp [:* -1 :y]]] [:exp :x]]
+   ["e^x (e^x)^-1" [:* [:exp :x] [:expt [:exp :x] -1]] 1]
+   ["log(e^x e^y)" [:log [:* [:exp :x] [:exp :y]]] [:+ :x :y]]
+   ["(e^x+1)(e^x-1)" [:* [:+ [:exp :x] 1] [:- [:exp :x] 1]]
+    #{[:+ [:exp [:* 2 :x]] -1] [:+ [:expt [:exp :x] 2] -1]}]
+   ["sin2 e^(x+y) + cos2 e^x e^y" [:+ [:* s2 [:exp [:+ :x :y]]] [:* c2 [:* [:exp :x] [:exp :y]]]]
+    [:exp [:+ :x :y]]]
+   ["sin2 x^(n+m) + cos2 x^n x^m" [:+ [:* s2 [:expt :x [:+ :n :m]]] [:* c2 [:* [:expt :x :n] [:expt :x :m]]]]
+    #{[:expt :x [:+ :n :m]] [:expt :x [:+ :m :n]]}]])
 
-(def all-rules (into rules/trig rules/powers))
+(def all-rules (-> [] (into rules/trig) (into rules/powers) (into rules/exp-log)))
 
-(defn workload-row [[label t expected]]
-  (let [[ms r] (timed #(simplified t all-rules {}))
-        g (:egraph r)
-        ok? (if (set? expected) (contains? expected (:result r)) (= expected (:result r)))]
-    {:fixture (str "wl " label) :n (:iterations r) :ms ms
-     :nodes (eg/node-count g) :classes (eg/class-count g)
-     :note (if ok? "reached" (str "NOT reached: " (pr-str (:result r))))}))
+(defn- reached? [expected result]
+  (if (set? expected) (contains? expected result) (= expected result)))
+
+(defn workload-row
+  ([w] (workload-row w {}))
+  ([[label t expected] opts]
+   (let [[ms r] (timed #(simplified t all-rules opts))
+         g (:egraph r)]
+     {:fixture (str "wl " label) :n (:iterations r) :ms ms
+      :nodes (eg/node-count g) :classes (eg/class-count g)
+      :note (if (reached? expected (:result r)) "reached" (str "NOT reached: " (pr-str (:result r))))})))
+
+;; ---------------------------------------------------------------------------
+;; experiment 6: the join preference
+
+(defn preference-row
+  "The whole workload under one :prefer measure: how many rows reach
+  their target, and the iterations, nodes and time summed over the
+  rows. Completeness should not depend on the measure; size and time
+  may."
+  [label prefer]
+  (let [rows (map #(workload-row % (if prefer {:prefer prefer} {})) workload)
+        reached (count (filter #(= "reached" (:note %)) rows))]
+    {:fixture (str "prefer " label) :n (reduce + (map :n rows)) :ms (reduce + (map :ms rows))
+     :nodes (reduce + (map :nodes rows)) :classes (reduce + (map :classes rows))
+     :note (str reached "/" (count workload) " reached"
+                (let [missed (remove #(= "reached" (:note %)) rows)]
+                  (if (seq missed) (str "; " (pr-str (map :fixture missed))) "")))}))
 
 (defn- row [{:keys [fixture n ms nodes classes note]}]
   (println (format "%-28s n=%-5d %8.1f ms   nodes=%-6d classes=%-6d %s" fixture n (double ms) nodes classes (or note ""))))
@@ -169,4 +201,9 @@
   (doseq [n [2 4 6 8 20 50 100]] (row (buried-trig n)))
   (println "experiment 5")
   (doseq [w workload] (row (workload-row w)))
+  (println "experiment 6")
+  (row (preference-row "fewest-terms (default)" nil))
+  (row (preference-row "lowest-degree" an/lowest-degree))
+  (row (preference-row "fewest-atoms" an/fewest-atoms))
+  (row (preference-row "most-terms" (an/most-terms 200)))
   (System/exit 0))

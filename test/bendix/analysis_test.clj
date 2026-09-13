@@ -132,6 +132,142 @@
     (is (= {:class (eg/find g x) :forms #{{{:x 1} 1} {{:y 1} 1, {} 1}}} (an/inconsistency g)))))
 
 ;; ---------------------------------------------------------------------------
+;; the spelling of canonical forms
+
+(deftest a-defined-atom-is-spelled-by-its-form
+  ;; sin y is opaque until the graph asserts it is x + 1; from then on
+  ;; every form that mentioned it is spelled with x + 1, so the two
+  ;; products land in one class through the index
+  (let [g (bx/egraph)
+        [g p1] (eg/add g [:* :a [:sin :y]])
+        [g p2] (eg/add g [:* :a [:+ :x 1]])
+        [g s] (eg/add g [:sin :y])
+        [g x1] (eg/add g [:+ :x 1])
+        g (eg/rebuild g)]
+    (is (not= (eg/find g p1) (eg/find g p2)))
+    (let [[g _] (eg/union g s x1)
+          g (eg/rebuild g)]
+      (ok? g)
+      (is (= {{:x 1} 1, {} 1} (data g s)) "the sine's class is worth x + 1")
+      (is (= {{:a 1, :x 1} 1, {:a 1} 1} (data g p1)) "and its parent is spelled with it")
+      (is (= (eg/find g p1) (eg/find g p2)) "so the index merges a·sin y with a·(x + 1)"))))
+
+(deftest a-solved-variable-is-spelled-by-its-value
+  ;; x + y and y + 2 once x = 2: the order alone keeps x + y, whose
+  ;; coefficients are smaller, so the spelling rule is what merges them
+  (let [g (bx/egraph)
+        [g a] (eg/add g [:+ :x :y])
+        [g b] (eg/add g [:+ :y 2])
+        [g x] (eg/add g :x)
+        [g two] (eg/add g 2)
+        g (eg/rebuild g)]
+    (is (not= (eg/find g a) (eg/find g b)))
+    (let [[g _] (eg/union g x two)
+          g (eg/rebuild g)]
+      (ok? g)
+      (is (= {{:y 1} 1, {} 2} (data g a)))
+      (is (= (eg/find g a) (eg/find g b)))
+      (is (nil? (an/inconsistency g)) "one spelling per class: nothing to report"))))
+
+(deftest a-class-worth-one-atom-is-that-atom
+  (let [g (bx/egraph)
+        [g q] (eg/add g [:* [:sin :x] 1])
+        [g s] (eg/add g [:sin :x])
+        [g a] (eg/add g [:cos [:* [:sin :x] 1]])
+        [g b] (eg/add g [:cos [:sin :x]])
+        g (eg/rebuild g)]
+    (ok? g)
+    (is (= (eg/find g q) (eg/find g s)) "sin x · 1 is the class of sin x")
+    (is (= (eg/find g a) (eg/find g b)) "so their cosines are congruent"))
+  ;; the class then holds the form "its own atom", which must not hide
+  ;; what the class learns later
+  (let [g (bx/egraph)
+        [g q] (eg/add g [:* [:sin :x] 1])
+        [g n] (eg/add g [:neg [:* [:sin :x] 1]])
+        [g s] (eg/add g [:sin :x])
+        [g m] (eg/add g [:- 1 :y])
+        [g _] (eg/union g s m)
+        g (eg/rebuild g)]
+    (ok? g)
+    (is (= {{} 1, {:y 1} -1} (data g q)) "sin x = 1 − y: the real form wins over the class's own atom")
+    (is (= {{:y 1} 1, {} -1} (data g n)) "and the parent is spelled with it")))
+
+(deftest cyclic-definitions-stay-atoms
+  (let [g (bx/egraph)
+        [g s] (eg/add g [:sin :y])
+        [g p] (eg/add g [:* [:sin :y] :a])
+        [g _] (eg/union g s p)
+        g (eg/rebuild g)
+        r (eg/find g s)]
+    (ok? g)
+    (is (= {:atom r} (data g s)) "sin y = a·sin y mentions the sine: an equation, not a definition; the atom stays")
+    (is (= #{{{r 1, :a 1} 1}} (an/forms g r)) "the equation is on record"))
+  (let [g (bx/egraph)
+        [g s] (eg/add g [:sin :y])
+        [g c] (eg/add g [:cos :y])
+        [g p] (eg/add g [:* [:cos :y] :a])
+        [g q] (eg/add g [:* [:sin :y] :b])
+        [g _] (eg/union g s p)
+        [g _] (eg/union g c q)
+        g (eg/rebuild g)]
+    (ok? g)
+    (is (= {{(eg/find g c) 1, :a 1} 1} (data g s)) "a two-cycle: sin y = a·cos y is a definition")
+    (is (= {:atom (eg/find g c)} (data g c))
+        "and cos y = b·sin y, spelled through it, mentions cos y: an equation, so the cosine stays an atom")))
+
+(deftest exact-values-fold
+  (let [g (bx/egraph)
+        [g e0] (eg/add g [:exp [:- :x :x]])
+        [g l1] (eg/add g [:log [:* 1 1]])
+        [g ex] (eg/add g [:exp :x])
+        g (eg/rebuild g)]
+    (ok? g)
+    (is (= {{} 1} (data g e0)) "exp 0 = 1")
+    (is (= {} (data g l1)) "log 1 = 0")
+    (is (= {:atom (eg/find g ex)} (data g ex)) "exp x stays opaque")
+    (let [[g one] (eg/add g 1)]
+      (is (= (eg/find g one) (eg/find g e0)) "and joins the class of 1"))))
+
+(deftest non-ring-operators-are-opaque-whatever-their-children
+  (let [big [:expt [:+ [:+ :x :y] :z] 4]
+        g (bx/egraph {:too-big 3})
+        [g b] (eg/add g big)
+        [g s] (eg/add g [:sin big])
+        [g d] (eg/add g [:- [:sin big] [:sin big]])
+        g (eg/rebuild g)]
+    (ok? g)
+    (is (= :too-big (data g b)))
+    (is (= {:atom (eg/find g s)} (data g s)) "sin of a too-big class is an atom, not too-big")
+    (is (= {} (data g d)) "so sin(big) − sin(big) = 0")))
+
+(deftest the-preference-is-pluggable
+  ;; x = y + 1 asserted: the default keeps x, most-terms keeps y + 1,
+  ;; and every parent follows the choice
+  (let [assert-it (fn [opts]
+                    (let [g (bx/egraph opts)
+                          [g x] (eg/add g :x)
+                          [g y1] (eg/add g [:+ :y 1])
+                          [g sq] (eg/add g [:expt :x 2])
+                          [g _] (eg/union g x y1)
+                          g (eg/rebuild g)]
+                      (ok? g)
+                      [(data g x) (data g sq)]))]
+    (is (= [{{:x 1} 1} {{:x 2} 1}] (assert-it {})))
+    (is (= [{{:x 1} 1} {{:x 2} 1}] (assert-it {:prefer an/fewest-terms})))
+    (is (= [{{:y 1} 1, {} 1} {{:y 2} 1, {:y 1} 2, {} 1}] (assert-it {:prefer (an/most-terms 200)})))
+    (is (= [{{:x 1} 1} {{:x 2} 1}] (assert-it {:prefer an/lowest-degree}))
+        "equal degree: the built-in order breaks the tie"))
+  (is (= [:* 5 :x] (:result (bx/simplify [:+ [:* 2 :x] [:* 3 :x]] {:prefer an/fewest-atoms})))
+      "simplify takes :prefer")
+  (is (thrown? clojure.lang.ExceptionInfo
+               (let [g (bx/egraph {:prefer (fn [p] (- (p/term-count p)))})
+                     [g x] (eg/add g :x)
+                     [g y1] (eg/add g [:+ :y 1])
+                     [g _] (eg/union g x y1)]
+                 (eg/rebuild g)))
+      "a key that is not a vector of naturals is refused"))
+
+;; ---------------------------------------------------------------------------
 ;; experiment 3: the soundness oracle
 
 (def ring-rules

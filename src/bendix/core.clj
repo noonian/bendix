@@ -7,7 +7,8 @@
 
   Options: :rules (default none), :cost (default `default-cost`),
   :dev? (check the normal forms after every rule application and
-  throw naming the rule), :too-big, and the runner's limits."
+  throw naming the rule), :too-big and :prefer for the analysis
+  (bendix.analysis/poly-analysis), and the runner's limits."
   (:require [bendix.analysis :as an]
             [bendix.poly :as poly]
             [bendix.term :as bt]
@@ -70,8 +71,8 @@
   "Add t and run rules to saturation or a limit; the e-graph and the
   root come back with the runner's result."
   ([t] (saturate t {}))
-  ([t {:keys [rules dev? too-big] :or {rules []} :as opts}]
-   (let [g (egraph (if too-big {:too-big too-big} {}))
+  ([t {:keys [rules dev?] :or {rules []} :as opts}]
+   (let [g (egraph (select-keys opts [:too-big :prefer]))
          [g root] (eg/add g t)
          res (rw/embiggen g rules (cond-> (select-keys opts runner-keys)
                                     dev? (assoc :check an/inconsistency)))]

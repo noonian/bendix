@@ -266,3 +266,102 @@
                  (and (empty? (check/violations g))
                       (nil? (rules/trig-inconsistency g))))))]
     (is (:pass? res) (pr-str res))))
+
+;; ---------------------------------------------------------------------------
+;; exp-log
+
+(def ex [:exp :x])
+(def ey [:exp :y])
+(def all (-> [] (into rules/trig) (into rules/powers) (into rules/exp-log)))
+
+(defn- simp-exp [t] (:result (simplify t {:rules rules/exp-log})))
+
+(deftest textbook-exp-log
+  (is (= [:exp [:+ :x :y]] (simp-exp [:* ex ey])))
+  (is (= [:exp [:+ :x :y]] (simp-exp [:exp [:+ :x :y]])) "already one exponential")
+  (is (= [:exp [:+ :x :y :z]] (simp-exp [:* [:* ex ey] [:exp :z]])))
+  (is (= [:exp :x] (simp-exp [:* [:exp [:+ :x :y]] [:exp [:* -1 :y]]])) "the arguments cancel in the ring")
+  (is (= 1 (simp-exp [:* ex [:expt ex -1]])) "exp x · (exp x)⁻¹: exp 0 folds to 1")
+  (is (= 1 (simp-exp [:exp 0])))
+  (is (= 0 (simp-exp [:log 1])))
+  (is (= 1 (simp-exp [:exp [:- :x :x]])))
+  (is (= [:exp [:* 2 :x]] (simp-exp [:expt ex 2])) "exp(x)² and exp(2x) tie; the node order decides")
+  (is (= [:exp :x] (simp-exp [:* [:exp [:* 1/2 :x]] [:exp [:* 1/2 :x]]])) "rational coefficients")
+  (let [r (simp-exp [:* [:expt ex :n] ex])]
+    (is (same-class? rules/exp-log r [:exp [:* [:+ :n 1] :x]]) "a symbolic exponent"))
+  (is (= [:+ :x :y] (simp-exp [:log [:* ex ey]])) "log of a product: collected, then log-of-exp")
+  (is (= [:* 2 :x] (simp-exp [:log [:expt ex 2]])))
+  (is (= [:* 2 :x] (simp-exp [:log [:exp [:* 2 :x]]])))
+  (is (= 0 (simp-exp [:- [:exp [:+ :x :y]] [:* ex ey]])))
+  (is (= [:+ :a :b [:exp [:+ :x :y]]] (simp-exp [:+ [:+ :a [:* ex ey]] :b])) "inside a sum")
+  (is (= [:+ [:exp [:* 2 :x]] -1] (simp-exp [:* [:+ ex 1] [:- ex 1]])))
+  (is (= [:* ex [:+ ey [:exp :z]]] (simp-exp [:* ex [:+ ey [:exp :z]]])) "the factored form is smaller")
+  (is (contains? #{[:exp [:+ :x 1]] [:exp [:+ 1 :x]]} (simp-exp [:* [:exp 1] ex])) "a constant argument")
+  (is (same-class? rules/exp-log [:expt ex -1] [:exp [:* -1 :x]])
+      "a lone power of an exponential: the rule visits the opaque class")
+  (is (= [:sin [:exp [:+ :x :y]]] (simp-exp [:sin [:* ex ey]])))
+  (is (= 0 (simp-exp [:- [:sin [:* ex ey]] [:sin [:exp [:+ :x :y]]]])) "merged under an opaque operator by congruence")
+  (is (= ex (simp-exp ex)))
+  (is (= [:log :x] (simp-exp [:log :x])))
+  (is (= [:exp [:log :x]] (simp-exp [:exp [:log :x]])) "conditional: not this rule set's business"))
+
+(deftest exp-log-saturates-quickly
+  ;; collect, then log-of-exp, then collect what the log revealed,
+  ;; then quiet: a constant, whatever the size of the sum around it
+  (let [t [:+ [:log [:* ex ey]] [:* [:exp [:+ :x :y]] [:exp [:* -1 :y]]]]
+        {:keys [iterations stop-reason egraph]} (bx/saturate t {:rules rules/exp-log})]
+    (is (= :saturated stop-reason))
+    (is (<= iterations 4))
+    (is (empty? (check/violations egraph))))
+  (let [{:keys [iterations stop-reason]} (bx/saturate [:log [:* ex ey]] {:rules rules/exp-log})]
+    (is (= :saturated stop-reason))
+    (is (<= iterations 3))))
+
+(deftest one-class-spelled-two-ways
+  ;; the cofactor is one class, written as x^(n+m) on one side and
+  ;; collected from xⁿ·xᵐ on the other; the canonical spelling is what
+  ;; lets pythagoras see one pair
+  (is (= [:expt :x [:+ :n :m]]
+         (:result (simplify [:+ [:* s2 [:expt :x [:+ :n :m]]] [:* c2 [:* xn xm]]] {:rules all}))))
+  (is (= [:exp [:+ :x :y]]
+         (:result (simplify [:+ [:* s2 [:exp [:+ :x :y]]] [:* c2 [:* ex ey]]] {:rules all}))))
+  (is (= [:+ [:* :q s2] [:* c2 [:exp [:+ :x :y]]]]
+         (:result (simplify [:+ [:* s2 :q] [:* c2 [:* ex ey]]] {:rules all})))
+      "and does not invent a pair"))
+
+(def exp-leaf-gen (gen/elements [:x :y 1 2 -1 ex ey [:exp [:+ :x :y]] [:exp [:* 2 :x]] [:log ex]]))
+
+(def exp-term-gen
+  (gen/recursive-gen
+   (fn [inner]
+     (gen/one-of [(gen/tuple (gen/return :+) inner inner)
+                  (gen/tuple (gen/return :*) inner inner)
+                  (gen/tuple (gen/return :-) inner inner)
+                  (gen/tuple (gen/return :neg) inner)
+                  (gen/tuple (gen/return :expt) inner (gen/choose -1 3))
+                  (gen/tuple (gen/return :exp) inner)
+                  (gen/tuple (gen/return :log) (gen/tuple (gen/return :exp) inner))]))
+   exp-leaf-gen))
+
+(def exp-env-gen (gen/fmap (fn [[x y]] {:x x :y y}) (gen/tuple (gen/choose -2 3) (gen/choose -2 3))))
+
+(deftest exp-log-preserves-value-where-defined
+  (let [res (tc/quick-check
+             200
+             (prop/for-all [t exp-term-gen, env exp-env-gen]
+               (let [{:keys [result stop cost]} (simplify t {:rules all :too-big 50})
+                     again (simplify result {:rules all :too-big 50})
+                     v (value t env)]
+                 (and (= :saturated stop)
+                      (or (= ::undefined v) (= v (value result env)))
+                      (<= (size result) (size t))
+                      (= cost (:cost again))))))]
+    (is (:pass? res) (pr-str res))))
+
+(deftest the-graph-behind-exp-log-is-well-formed
+  (let [res (tc/quick-check
+             100
+             (prop/for-all [t exp-term-gen]
+               (let [{:keys [egraph]} (bx/saturate t {:rules all :too-big 50})]
+                 (empty? (check/violations (bx/materialize-all egraph))))))]
+    (is (:pass? res) (pr-str res))))

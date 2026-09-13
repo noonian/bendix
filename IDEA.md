@@ -77,8 +77,13 @@ them as rules would reintroduce the 3ⁿ blowup.
   Built as one normal-form rule over monomials (`combine-powers`,
   section "Status"): the analysis already folds non-negative integer
   exponents, so the rule handles the powers it holds as atoms.
-- `exp-log`: `[:exp [:log ?x]] = ?x` (needs `?x > 0`: conditional),
-  `[:log [:* ?a ?b]] = [:+ [:log ?a] [:log ?b]]` (conditional), `[:exp [:+ ?a ?b]] = [:* [:exp ?a] [:exp ?b]]`.
+- `exp-log`: `[:* [:exp ?a] [:exp ?b]] = [:exp [:+ ?a ?b]]` and
+  `[:expt [:exp ?a] ?n] = [:exp [:* ?n ?a]]`, built as one normal-form
+  rule over monomials (`combine-exp`, section 10 item 1, the mirror
+  image of `combine-powers`); `[:log [:exp ?x]] = ?x` as a pattern
+  rule. `[:exp [:log ?x]] = ?x` (needs `?x > 0`) and
+  `[:log [:* ?a ?b]] = [:+ [:log ?a] [:log ?b]]` are conditional and
+  wait for the sign lattice.
 - `trig`: Pythagorean, double angle, sum/difference, parity.
 - `abs-sign`: `[:abs [:* ?a ?b]] = [:* [:abs ?a] [:abs ?b]]`, `[:abs ?x] = ?x` when `?x ≥ 0`.
 - `derivative`: `[:D ?c ?x] = 0` for constants and unrelated atoms,
@@ -116,7 +121,8 @@ one to try.
 
 A normal-form rule rewrites a class's *polynomial*, not a node. Its
 left-hand side is a searcher (cromulent IDEA.md section 7) that
-visits every root whose `:poly` data is a polynomial and asks a
+visits every root whose `:poly` data is a polynomial, and every
+opaque class as its unit polynomial `{{id 1} 1}`, and asks a
 *polynomial rewrite* `(fn [g id p] [p' ...])` for the other forms the
 class is worth. Its right-hand side is each `p'` rendered by
 `bendix.poly/->term` as a **pattern** over the atoms: a variable
@@ -128,8 +134,9 @@ replaced by its variable, `[:cos ?u<id>]`. The match carries that pattern as
 its own `:rhs`, a cromulent extension made for this (a match may
 supply the right-hand side), so one rule says a different thing about
 every class. The runner instantiates and unions as for any rule; the
-analysis joins the new node's form into the class, keeps the smaller,
-and the index merges any other class that already had it.
+analysis joins the new node's form into the class, keeps the
+preferred one (section 4), and the index merges any other class that
+already had it.
 
 `(normal-form-rule name f)` is the constructor (`bendix.rules`). A
 rule costs one pass over the roots per iteration and polynomial
@@ -190,7 +197,9 @@ milestone.
 
 ## 4. Analyses
 
-- `const`: constant folding over exact numbers (the classic).
+- `const`: constant folding over exact numbers (the classic). The
+  polynomial analysis already folds ring constants, `exp 0` and
+  `log 1`; `const` is for what remains (`abs`, integer `gcd`).
 - `poly`: the polynomial normal form (../design/ac-problem.md C), designed in
   detail below. In a dev mode over *ring-only* rule sets it is a
   soundness oracle: any two classes that merge with different
@@ -221,37 +230,93 @@ by its class id, as ../design/ac-problem.md specifies; its own data is
 `{:atom id}`, and its parents read that as the variable `id`. Opaque
 nodes are not interpreted, so the name is a placeholder for "whatever
 that class is worth", and a polynomial over such names is a correct
-statement about the graph. Ids go stale when classes merge, so every
-use canonicalizes them through `find`, and the core recomputes the
-data of every class whose nodes or children changed.
+statement about the graph.
+
+**A canonical form is spelled over undefined atoms only.** An atom is
+*defined* when its class is worth something other than itself: an
+opaque class a rule proved is worth a product of other atoms
+(`exp(x + y) = exp(x)·exp(y)`), or a variable the graph asserted or
+solved to be a constant (`x = 2`). `canonical`, the one function
+through which every form is read, maps every class id to its root and
+replaces every defined atom by its class's form, recursively, under
+the `:too-big` limit, with one guard: an atom whose chain of
+definitions reaches itself stays an atom, so `sin y = a·sin y` and a
+two-cycle of such assertions stay finite. Without this the analysis
+was not canonical modulo the equalities the graph itself held: the
+join keeps the smallest form and an atom is the smallest spelling of
+anything, so classes that mentioned `exp(x + y)` before the proof kept
+the one-atom spelling while classes built afterwards from the product
+spelled it with two, and `sin²x·x^(n+m) + cos²x·xⁿ·xᵐ` stayed as
+written under `trig` + `powers` because its two cofactors were one
+class spelled two ways (found 2026-09-13 while designing `exp-log`;
+likewise `x + y` and `y + 2` under `x = 2`, since `x + y` orders below
+`y + 2` on coefficient size). Ids go stale when classes merge and
+definitions arrive later; the core recomputes the data of every class
+whose nodes or children changed, so neither survives a rebuild. A
+variable is looked up only when the analysis state says some variable
+is defined, so the common path costs what it did.
 
 **make** on a node: a number is a constant; a variable is itself; `:+`,
-`:*`, `:neg`, `:-` and `:expt` with a non-negative integer exponent
-combine the children's polynomials; any other operator yields the
-placeholder for the node. `:/` and negative exponents are not ring
-operations and stay opaque for now (a rational-function normal form
-is a later analysis).
+`:*`, `:neg`, `:-`, `:/` by a constant and `:expt` with a non-negative
+integer exponent combine the children's polynomials; `:exp` of the
+zero polynomial is 1 and `:log` of the constant 1 is 0, the two points
+of that family where an exact value exists; any other node is opaque,
+whatever its children's data (a `sin` of a `:too-big` class is an
+atom, not too big). Negative exponents and division by a non-constant
+are not ring operations and stay opaque for now (a rational-function
+normal form is a later analysis).
 
 **merge** is the semilattice join. Two equal polynomials join to
 themselves. Two different ones mean this e-graph asserts they are
 equal. In order: `:conflict` absorbs; a given-up class absorbs; an
-atom is below any polynomial; `:too-big` (a term count over the
+atom, `{:atom id}` or the unit polynomial "`sin x`" that `sin x · 1`
+computes, is below `:too-big` and below any form that *defines* it,
+one that does not mention it, while a form that mentions it
+(`sin y = a·sin y`) is an equation the class records with the atom
+staying its representative; `:too-big` (a term count over the
 threshold) absorbs polynomials; a difference that is a non-zero
 constant (`x = x + 1`) is a contradiction in the ring itself and
-becomes `:conflict`; otherwise the join is the *smaller* polynomial
-under a total order (fewer terms, then lower degree, then term by
-term). The equation is kept as an assumption the graph made, not a
-bug: `sin²x + cos²x` joined with `1` is a true identity the ring
-cannot see, and `x = y + 1` is a user assertion.
+becomes `:conflict`; otherwise the join is the *preferred* polynomial.
+The equation is kept as an assumption the graph made, not a bug:
+`sin²x + cos²x` joined with `1` is a true identity the ring cannot
+see, and `x = y + 1` is a user assertion.
+
+**Which form is preferred is a policy, pluggable within a family that
+keeps the guarantees.** The default is the smaller under a total order
+(fewer terms, then lower degree, then smaller coefficients by size,
+then term by term). `:prefer` puts a *measure* in front of it: a
+function from a polynomial to a vector of natural numbers, the
+smaller key winning, shorter keys first, ties to the built-in order.
+`fewest-terms` (the default as a measure), `lowest-degree`,
+`fewest-atoms` and `most-terms` (bounded by the threshold) ship. A
+comparator could not be checked for well-foundedness; a measure into
+naturals is well-founded by construction, and its lexicographic
+product with a well-founded total order is well-founded and total, so
+termination and cross-runtime determinism hold for any plug. The
+measure sees the polynomial only, never the graph, so the order cannot
+shift under the analysis. What the choice cannot affect: soundness,
+since every form is valid; and completeness, since each rule proposes
+every canonical form of its fragment and the index catches a proposed
+form at the moment its node is created, whatever representative the
+other class kept. What it does affect: the representative parents
+compute with, hence speed and how soon the threshold is hit, and the
+materialized term. This is the pattern of Knuth–Bendix orders and
+Gröbner monomial orders, a family proven once with pluggable
+parameters, rather than egglog's user-written merge functions, which
+are unchecked. Experiment 6 (../design/ac-problem.md) measures it: all
+four measures reach every workload target, and `most-terms` costs
+thirteen to fifteen times the time.
 
 The core joins what a class's nodes now say *into* what the class
-had, so a class keeps the smallest form it has ever derived; every
+had, so a class keeps the preferred form it has ever derived; every
 such form is valid under the equalities asserted, so this is sound,
-and the data is monotone in the order. The order is well-founded
-because term count, degree and coefficient size (|numerator| +
-denominator) come before anything else: below any polynomial there
-are finitely many others, so a class changes finitely often and no
-cap is needed. A class asserting `a = a/2` simply keeps `a`.
+and the data descends in the order except when re-spelled. The order
+is well-founded because term count, degree and coefficient size
+(|numerator| + denominator), or a measure into naturals, come before
+anything else: below any polynomial there are finitely many others. A
+re-spelling happens only when some atom becomes defined, which each
+class does at most once, so a class changes finitely often and no cap
+is needed. A class asserting `a = a/2` simply keeps `a`.
 
 The equation is then used. The core hands the analysis's `reconcile`
 the forms that met in a class (the two sides of a union, or every
@@ -267,8 +332,11 @@ record.
 **modify** is where the normal form does its work. The analysis keeps
 an index from polynomial to class id in a key of the e-graph value
 that belongs to it (the core allows analysis-owned state; cromulent
-IDEA.md section 9). When a class's data is a polynomial, modify looks
-it up: another class with the same normal form is unioned with it.
+IDEA.md section 9). Every class is indexed under its canonical form,
+an opaque class under its own atom, so `sin x · 1` is the class of
+`sin x` during saturation and not only at extraction. Modify looks
+the form up: another class with the same normal form is unioned with
+it.
 That union is what replaces associativity, commutativity,
 distributivity and like-term collection as rules: every arrangement
 of a sum lands in one class without any of the 3ⁿ e-nodes existing.
@@ -317,7 +385,9 @@ exponents unconditionally (section 3), so `x · x⁻¹` becomes `1` and
 with `0⁰ = 1`. Division stays opaque (`[:/ :x :x]` is not `1`), so
 the exemption reaches only what is written as a power. When option 2
 exists, `x ≠ 0` from a power combination is the first assumption
-`:assuming` reports.
+`:assuming` reports. `exp-log` needs no exemption: `exp` is never
+zero, so `exp(x)·exp(x)⁻¹ = 1` and `exp(x)^½ = exp(x/2)` hold wherever
+the input is defined.
 
 ## 6. Cost functions: where "simplest" lives
 
@@ -352,8 +422,15 @@ default one unsurprising.
   evaluate original and result at random exact rational points; they
   must agree wherever both are defined (skip points where a
   denominator is zero or a log argument is non-positive). Exact
-  arithmetic makes this a strict equality, not a tolerance. This test
-  catches unsound rules better than any curated example set.
+  arithmetic makes this a strict equality, not a tolerance. For `exp`
+  and `log` the model is formal: a value that mentions an exponential
+  is a Laurent polynomial in one indeterminate `T` with `exp v = T^v`
+  for an integer `v` and `log T^v = v`, so every identity the rule set
+  uses holds exactly and no number ever grows (a base-2 model was
+  tried first and failed on `exp(64)² = exp(128)`: bounding the
+  argument made the domain not closed under the identity). This test
+  catches unsound rules better than any curated example set; on the
+  day `exp-log` landed it found two real defects in the analysis.
 - **The polynomial oracle** in dev mode (section 4) catches unsound
   ring-fragment merges at the moment they happen, with the rule name.
 - **Textbook set.** A curated table of inputs and expected outputs per
@@ -381,6 +458,9 @@ small, optional piece; Emmy's test corpus is a resource.
 - The `:too-big` threshold for the polynomial analysis, and whether the
   normal form is materialized into the e-graph as a node (so it can be
   extracted) always, never, or only at the root.
+- Which `:prefer` measures are worth shipping beyond the four, and
+  whether a measure should ever see the graph (today it cannot, so
+  the order is fixed for the analysis's whole run).
 - Whether `:D` belongs in the term language (differentiation as
   equality) or is a separate operation that calls into the engine.
   Decided (section 10, item 2): the former; the oracle for it is a
@@ -449,20 +529,11 @@ programmers, the canonical form *is* the primary syntax.
 ## 10. Next: milestone 2
 
 Milestone 1 built the ring fragment; the first steps of milestone 2
-built normal-form rules, `pythagoras`, the term seam in the rules and
-`powers` (section "Status" below). Next, in this order:
+built normal-form rules, `pythagoras`, the term seam in the rules,
+`powers`, `exp-log` and the canonical spelling of forms (section
+"Status" below). Next, in this order:
 
-1. **`exp-log`, the unconditional part.** `exp` of a class whose
-   polynomial has more than one term, or a coefficient other than 1,
-   is the product of powers of `exp` of its monomials
-   (`exp(2x + y) = exp(x)²·exp(y)`): a normal-form rule on the
-   argument's data, rendered as a placeholder product, both
-   directions available to extraction as always.
-   `[:log [:exp ?x]] = ?x` is a pattern rule, since the nesting is a
-   node. `exp 0 = 1` and `log 1 = 0` belong to `const` (item 4).
-   `exp(log x) = x` and `log(ab) = log a + log b` are conditional and
-   wait for the sign lattice (item 3).
-2. **`derivative`.** `:D` stays in the term language (section 9,
+1. **`derivative`.** `:D` stays in the term language (section 9,
    decided): differentiation is equality saturation with a cost that
    refuses `:D`. Three layers. (a) A normal-form rule: for `[:D U x]`
    with `x` a variable and `U`'s data a polynomial `p` over atoms,
@@ -484,18 +555,21 @@ built normal-form rules, `pythagoras`, the term seam in the rules and
    numerically at random rational points (the unit-circle model of
    section 3 does not differentiate like sine, so trig derivatives
    are checked only the first way).
-3. The sign lattice (section 4) and `:assume`, so conditional rules
-   fire soundly; `:assuming` in results stops being empty.
-4. `const` for non-ring operators the analysis can evaluate exactly
-   (`abs`, integer `gcd`, `exp 0`, `log 1`); the polynomial analysis
-   already folds ring constants.
-5. More trig. Parity (`sin(−u) = −sin u`) needs the negated argument
+2. The sign lattice (section 4) and `:assume`, so conditional rules
+   fire soundly; `:assuming` in results stops being empty. The
+   conditional half of `exp-log` (`exp(log x) = x`,
+   `log(ab) = log a + log b`) comes with it, and `log(xⁿ) = n·log x`,
+   which is unconditional for odd `n`.
+3. `const` for non-ring operators the analysis can evaluate exactly
+   (`abs`, integer `gcd`); the polynomial analysis already folds ring
+   constants, `exp 0` and `log 1`.
+4. More trig. Parity (`sin(−u) = −sin u`) needs the negated argument
    as a class; double angle and sum formulas need a numeric model
    that carries the half-angle parameter through argument arithmetic
    (section 3). The alternative to measure against: fold the
    Pythagorean identity into the analysis itself, so no node is ever
    added for it and the index does the merging.
-6. Rational-function normal forms, or division under a nonzero
+5. Rational-function normal forms, or division under a nonzero
    analysis: open.
 
 ## Status
@@ -602,5 +676,57 @@ where a point outside the input's domain is skipped: value preserved
 where defined, never grows, cost a fixpoint, graph well-formed. The
 suite is 38 tests, 188 assertions. `bench/`: four powers rows in
 experiment 5.
+
+`exp-log`, the unconditional part, with the canonical spelling of
+forms and the pluggable join preference (2026-09-13, green on both
+runtimes): the design sketch had `exp` of a sum split into a product;
+prototyping it found the analysis was not canonical modulo the
+graph's own equalities (section 4, "spelled over undefined atoms"),
+and the collecting direction is what merges. `bendix.analysis/canonical`
+expands defined atoms, opaque and variable, with a cycle guard and
+the threshold, and `bendix.poly/substitute` is its arithmetic; `make`
+treats every non-ring node as opaque and folds `exp 0`, `log 1`;
+`modify` indexes every class, an opaque class under its own atom, so
+`sin x · 1` is `sin x` during saturation; the join lets an atom yield
+to a form that defines it and not to one that mentions it, and takes
+a `:prefer` measure
+(`fewest-terms`, `lowest-degree`, `fewest-atoms`, `most-terms`),
+plumbed through `simplify`. `combine-exp` is a normal-form rule over
+monomials, the mirror image of `combine-powers`: the exponential
+factors of a monomial (`factor` finds the base, and the base holds
+`[:exp u]`) become one placeholder `[:exp Σ (k + S)·u]`; the analysis
+normalizes the argument, the index merges it with any class worth
+the same, the hashcons merges the exponential; `log-of-exp` is the
+pattern rule `[:log [:exp ?x]] → ?x`; `exp-log` holds both.
+`normal-form-rule` now visits an opaque class as its unit polynomial,
+so a lone `exp(x)⁻¹` meets `exp(−x)`. Not included: the splitting
+direction, and the conditional rules (section 10 item 2). Tests (the
+suite is 52 tests, 269 assertions): `substitute` by example and as a
+homomorphism; a defined atom and a solved variable spelled by their
+forms so two products merge, a class worth one atom being that atom
+and its own atom hiding nothing, cyclic assertions finite, `exp 0`
+and `log 1` folded, `sin` of a too-big class opaque, `:prefer`
+changing the representative and a bad key refused; twenty-six
+textbook exp-log results, saturation in at most four iterations, the
+two spelling cases (`sin²x·x^(n+m) + cos²x·xⁿ·xᵐ` and its `exp`
+twin) and a non-pair left alone; and the numeric oracle in the
+formal model (section 7) over random terms with exponentials and
+logs under all three rule sets: value preserved where defined, never
+grows, cost a fixpoint, graph well-formed. It found three defects on
+the way: `exp(2x)·1` raised to −1 did not collect because `exp(2x)·1`
+was not the class of `exp(2x)`; `log(exp(1 − x))¹` hid `1 − x` behind
+the class's own atom; and the first fix for that let
+`sin x · y⁻¹ · y` redefine `sin x` as a product mentioning itself,
+which the definition/equation distinction above settles. Known and
+older, found by soaking the trig property: `pythagoras` on a high
+power of one sine or cosine (`sin³²x`) proposes a rendered form whose
+every sub-class gets proposals of its own, and the node limit is hit
+before saturation; the result is still right and the property is
+rarely reached, but it is a real limit of answer 2 on powers, for the
+trig item of section 10. `bench/`:
+seven experiment 5 rows and experiment 6 (../design/ac-problem.md).
+The spelling machinery costs about 1.3× on the 100-atom rows of
+experiments 2 and 4; a benchmark, not a design, decides whether that
+is worth chasing.
 
 Not yet: everything in section 10, other syntaxes, explanations.
