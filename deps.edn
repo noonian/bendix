@@ -1,0 +1,15 @@
+{:paths ["src"]
+ :deps {org.clojure/clojure {:mvn/version "1.12.0"}
+        noonian/cromulent {:local/root "../cromulent"}}
+ :aliases
+ {:test {:extra-paths ["test" "../cromulent/test"]
+         :extra-deps {org.clojure/test.check {:mvn/version "1.1.1"}}
+         :main-opts ["-m" "bendix.test-runner"]}
+  :bench {:extra-paths ["bench"]
+          :main-opts ["-m" "bendix.bench"]}}
+ :tasks
+ {test {:extra-paths ["test" "../cromulent/test"]
+        :extra-deps {org.clojure/test.check {:mvn/version "1.1.1"}}
+        :main-opts ["-m" "bendix.test-runner"]}
+  bench {:extra-paths ["bench"]
+         :main-opts ["-m" "bendix.bench"]}}}

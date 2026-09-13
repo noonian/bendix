@@ -1,0 +1,418 @@
+# bendix — the CAS layer — design
+
+Named for Knuth–Bendix completion (1970), where turning equations
+into rewrite systems began; e-graphs are its descendant.
+
+bendix is a Computer Algebra System. A CAS manipulates mathematical expressions
+symbolically. This one starts as a **simplifier** on top of the
+e-graph library, and everything else a CAS does (differentiation,
+expansion, factoring, solving) is added as rule sets, analyses, and
+cost functions on the same engine. It runs on Jolt and the JVM.
+
+The thesis: *simplification is equality saturation plus taste*. The
+e-graph finds every equal form the rules and analyses can reach; a
+cost function says which one the user wanted.
+
+## 1. Audience and term format
+
+**Audience: Clojure programmers**, not scientists. That decides the
+defaults: terms are plain data that print as they are written, the
+API is REPL-first and data-in/data-out, rules and cost functions are
+values, errors are `ex-info` with data, and nothing requires a reader
+macro or a notebook. We are not bound by scmutils, and since Emmy
+already serves the scmutils audience with the scmutils syntax, we
+deliberately do not mirror it.
+
+**Term format: tagged vectors** (decided 2026-09-13), the workspace
+shape (../design/overview.md). Operators are keywords, variables are keywords in
+leaf position, constants are exact numbers. Position disambiguates: a
+keyword at the head of a vector is an operator, anywhere else it is a
+variable. Named constants are nullary operators (`[:pi]`, `[:e]`) so
+they cannot be mistaken for variables.
+
+```clojure
+[:+ [:* 2 :x] [:expt :y 2]]      ;; 2x + y²
+[:D [:sin [:* 2 :x]] :x]          ;; d/dx sin(2x)
+```
+
+Floating-point input is rejected or rationalized explicitly; the
+engine is exact. Pattern variables are `?x` symbols and appear only in
+rules.
+
+Other syntaxes are compilers to this one and come later, if at all: an
+s-expression reader, an infix string parser (`"2*x + y"`),
+pretty-printers to infix or TeX. None is on the critical path, and the
+canonical form is what every API takes and returns. A term protocol in
+the core means even the canonical form could change without touching
+the engine.
+
+## 2. Pipeline
+
+```
+term ──add──▶ e-graph ──saturate(rules, analyses, limits)──▶ e-graph ──extract(cost)──▶ term
+```
+
+`(simplify term)` and `(simplify term {:rules ... :cost ... :assume ...})`.
+The result carries what the engine can say about it:
+
+```clojure
+{:result   [:* 2 [:cos [:* 2 :x]]]
+ :cost     5
+ :assuming #{}            ;; side conditions the result depends on (section 5)
+ :stop     :saturated}    ;; or which limit was hit
+```
+
+## 3. What is a rule and what is not
+
+**Not rules:** the commutative-ring identities (AC of `+` and `*`,
+distributivity, `x − x = 0`, `0·x = 0`, collecting like terms,
+constant arithmetic). These are handled by the polynomial normal-form
+analysis (../design/ac-problem.md, approach C) and are complete there. Writing
+them as rules would reintroduce the 3ⁿ blowup.
+
+**Rules**, in layered sets a caller can compose:
+
+- `powers`: `[:expt ?x 0] = 1`, `[:expt [:expt ?x ?m] ?n] = [:expt ?x [:* ?m ?n]]`
+  (integer exponents only, unconditionally), `[:* [:expt ?x ?m] [:expt ?x ?n]] = [:expt ?x [:+ ?m ?n]]`.
+- `exp-log`: `[:exp [:log ?x]] = ?x` (needs `?x > 0`: conditional),
+  `[:log [:* ?a ?b]] = [:+ [:log ?a] [:log ?b]]` (conditional), `[:exp [:+ ?a ?b]] = [:* [:exp ?a] [:exp ?b]]`.
+- `trig`: Pythagorean, double angle, sum/difference, parity.
+- `abs-sign`: `[:abs [:* ?a ?b]] = [:* [:abs ?a] [:abs ?b]]`, `[:abs ?x] = ?x` when `?x ≥ 0`.
+- `derivative`: `[:D ?c ?x] = 0` for constants and unrelated atoms,
+  `[:D ?x ?x] = 1`, linearity, product, chain rule
+  (`[:D [:sin ?u] ?x] = [:* [:cos ?u] [:D ?u ?x]]`), and so on.
+
+Every rule is a value with a name; rule sets are vectors of rules;
+tests run each set alone and in combination.
+
+**The sub-sum problem.** If ring identities are not rules, the e-graph
+holds `a + sin²x + cos²x + b` only as the binary tree the user wrote,
+and the pattern `[:+ [:expt [:sin ?x] 2] [:expt [:cos ?x] 2]]` finds
+nothing: there is no node for the inner pair. Three answers, to be
+measured (../design/ac-problem.md experiments 4 and 5):
+
+1. AC rules with backoff after all, only to *materialize* orderings
+   for matching, with the polynomial analysis merging what they
+   produce. The blowup returns, throttled.
+2. **Normal-form rules.** A rule whose left-hand side is a function
+   over the class's polynomial rather than a pattern: "a class whose
+   normal form contains `k·sin(u)² + k·cos(u)²` for some `u`" binds
+   `?u` and `?k`, and the right-hand side is the polynomial with that
+   part replaced by `k`. Matching modulo AC becomes a walk over a
+   sorted monomial map, which is cheap and complete for the ring
+   fragment. This needs the core to accept a searcher function in
+   place of a pattern (cromulent IDEA.md section 7); the runner does
+   not otherwise change.
+3. Bag-valued nodes (../design/ac-problem.md approach B), the heavier core change,
+   if 2 turns out to need too many special cases.
+
+Answer 2 is the thesis of approach C taken seriously and is the first
+one to try.
+
+## 4. Analyses
+
+- `const`: constant folding over exact numbers (the classic).
+- `poly`: the polynomial normal form (../design/ac-problem.md C), designed in
+  detail below. In a dev mode over *ring-only* rule sets it is a
+  soundness oracle: any two classes that merge with different
+  polynomials expose a wrong rule, by name.
+- `nonzero` / `sign` / `positive`: a small lattice
+  (`unknown ⊑ nonneg, nonpos ⊑ zero, pos, neg`) computed from
+  constants, squares, `exp`, `abs`, sums of positives, products, and
+  from user assumptions. This is what makes conditional rules fire
+  soundly.
+- Later: `integer`, `real`/`complex` domain, interval bounds.
+
+Analyses compose through the core's `compose`; the CAS ships a default
+composition.
+
+### The polynomial analysis
+
+The data of a class is its **normal form**: a sparse polynomial with
+exact rational coefficients over a set of *indeterminates*, as a
+sorted map from monomial to coefficient, a monomial being a sorted map
+from indeterminate to positive integer exponent. `{}` is zero; `{{} 1}`
+is one; `{{:x 1} 2, {:x 2} 1}` is `2x + x²`. Sorted maps give a
+canonical value with structural equality, which is all the merging
+index needs.
+
+**Indeterminates** are of two kinds. A *variable* is its keyword. An
+*opaque class*, one none of whose nodes is a ring operation, is named
+by its class id, as ../design/ac-problem.md specifies; its own data is
+`{:atom id}`, and its parents read that as the variable `id`. Opaque
+nodes are not interpreted, so the name is a placeholder for "whatever
+that class is worth", and a polynomial over such names is a correct
+statement about the graph. Ids go stale when classes merge, so every
+use canonicalizes them through `find`, and the core recomputes the
+data of every class whose nodes or children changed.
+
+**make** on a node: a number is a constant; a variable is itself; `:+`,
+`:*`, `:neg`, `:-` and `:expt` with a non-negative integer exponent
+combine the children's polynomials; any other operator yields the
+placeholder for the node. `:/` and negative exponents are not ring
+operations and stay opaque for now (a rational-function normal form
+is a later analysis).
+
+**merge** is the semilattice join. Two equal polynomials join to
+themselves. Two different ones mean this e-graph asserts they are
+equal. In order: `:conflict` absorbs; a given-up class absorbs; an
+atom is below any polynomial; `:too-big` (a term count over the
+threshold) absorbs polynomials; a difference that is a non-zero
+constant (`x = x + 1`) is a contradiction in the ring itself and
+becomes `:conflict`; otherwise the join is the *smaller* polynomial
+under a total order (fewer terms, then lower degree, then term by
+term). The equation is kept as an assumption the graph made, not a
+bug: `sin²x + cos²x` joined with `1` is a true identity the ring
+cannot see, and `x = y + 1` is a user assertion.
+
+The core joins what a class's nodes now say *into* what the class
+had, so a class keeps the smallest form it has ever derived; every
+such form is valid under the equalities asserted, so this is sound,
+and the data is monotone in the order. The order is well-founded
+because term count, degree and coefficient size (|numerator| +
+denominator) come before anything else: below any polynomial there
+are finitely many others, so a class changes finitely often and no
+cap is needed. A class asserting `a = a/2` simply keeps `a`.
+
+The equation is then used. The core hands the analysis's `reconcile`
+the forms that met in a class (the two sides of a union, or every
+node's form at a recompute), so no second pass over the nodes is
+needed. Two forms whose difference is `α·v + β` for a single atom `v`
+determine it, and `reconcile` unions `v` with the constant `−β/α`: `a = a/2` and `a = −a` give `a = 0`,
+`a = 2a + 1` gives `a = −1`. A difference that is a non-zero constant
+is `:conflict`. Anything else (`x = y + 1`, `sin²x + cos²x = 1`) the
+ring cannot resolve; the class keeps its smallest form, and the
+equation is what the `:assuming` bookkeeping of section 5 will
+record.
+
+**modify** is where the normal form does its work. The analysis keeps
+an index from polynomial to class id in a key of the e-graph value
+that belongs to it (the core allows analysis-owned state; cromulent
+IDEA.md section 9). When a class's data is a polynomial, modify looks
+it up: another class with the same normal form is unioned with it.
+That union is what replaces associativity, commutativity,
+distributivity and like-term collection as rules: every arrangement
+of a sum lands in one class without any of the 3ⁿ e-nodes existing.
+Materializing the normal form as a node, so the expanded form is
+extractable, is done only at the root on request (`:expand`) or never;
+doing it everywhere would reintroduce the nodes the analysis exists to
+avoid.
+
+**What it does not do.** It cannot see `sin²x + cos²x = 1` on its
+own; that is a rule (a normal-form rule, section 3). It does not
+decide equality of rational functions, or of anything under a radical
+or a transcendental function. It is the ring fragment, complete there
+and honest about its edges.
+
+## 5. Conditions, soundness, and honest answers
+
+A merge is global and permanent within the value. Merging `[:/ :x :x]`
+with `1` when `x` might be zero poisons everything downstream. The
+rule is simple and unbreakable: **a conditional rewrite fires only
+when an analysis proves its condition.** No analysis, no merge.
+
+Users still want `x/x → 1`. Three ways to give it to them, all
+explicit:
+
+1. **Assumptions**: `(simplify t {:assume [[:not= :x 0] [:> :y 0]]})`
+   seeds the `sign` analysis; the result's `:assuming` echoes what was
+   used.
+2. **Conditional results**: a mode where conditional rules fire
+   speculatively on a *copy* of the e-graph (persistence makes this
+   cheap) and the result reports the conditions it relied on:
+   `{:result 1 :assuming #{[:not= :x 0]}}`. The user, not the engine,
+   decides whether that is acceptable.
+3. **Disequalities in the graph** (Zakhour 2025): a later upgrade so
+   `x ≠ 0` can be *derived*, not only assumed.
+
+This is a user-experience decision as much as a technical one. Users
+of every mainstream CAS have been burned by a silent `x ≠ 0`; the
+difference between "wrong" and "right, given this assumption you can
+see" is the difference between a tool people trust and one they
+double-check by hand. Option 2 is the one to get right.
+
+## 6. Cost functions: where "simplest" lives
+
+A saturated e-graph contains the expanded form, the factored form, and
+everything between. Extraction chooses. So the cost function is a
+first-class, documented, user-supplied value, and the defaults are
+opinions:
+
+- `default-cost`: fewest nodes, with a slight preference (1/64 of a
+  node) for the operators normal forms are written in, so that of
+  `x/2` and `(1/2)·x` the latter wins. The default. Ties that remain
+  go to cromulent's deterministic node order, so a result is the same
+  on both runtimes.
+- `prefer-factored` / `prefer-expanded`: weights on `:*`-over-`:+`
+  vs. `:+`-over-`:*` at the root.
+- `no-D`: infinite cost for any `:D` node. **Differentiation is
+  simplification with a cost function that refuses derivatives**:
+  the derivative rules make `[:D [:sin [:* 2 :x]] :x]` equal to
+  `[:* 2 [:cos [:* 2 :x]]]`, and extraction with `no-D` picks the
+  latter. The same trick gives `integrate` for the rules we have, and
+  "solve for x" as a cost that wants `:x` alone on one side.
+- Operator cost tables (a `:sin` costs more than a `:*`), depth
+  penalties, and combinations, via a small combinator set.
+
+Whether a result is "simple" is the user's judgment; the library's job
+is to make that judgment a value they can pass in, and to make the
+default one unsurprising.
+
+## 7. Testing
+
+- **Numeric oracle.** For a random expression, `simplify` it, then
+  evaluate original and result at random exact rational points; they
+  must agree wherever both are defined (skip points where a
+  denominator is zero or a log argument is non-positive). Exact
+  arithmetic makes this a strict equality, not a tolerance. This test
+  catches unsound rules better than any curated example set.
+- **The polynomial oracle** in dev mode (section 4) catches unsound
+  ring-fragment merges at the moment they happen, with the rule name.
+- **Textbook set.** A curated table of inputs and expected outputs per
+  rule set, run alone and combined.
+- **Emmy as a second oracle**, later: simplify with both and compare
+  numerically. Not a dependency of the library.
+
+## 8. Relationship to Emmy
+
+Emmy is the mature Clojure CAS (a port of scmutils) with a rule-based
+directed simplifier and polynomial canonicalization. We are not
+competing on breadth, and we deliberately do not share its syntax:
+Emmy already serves people who want scmutils in Clojure. What an e-graph simplifier offers that Emmy's
+design does not: no rule-ordering sensitivity, all equal forms
+available for extraction under different costs, cheap "show your
+work" once explanations land, and conditional results as values. An
+Emmy adapter (their expression format to ours and back) is a later,
+small, optional piece; Emmy's test corpus is a resource.
+
+## 9. Open questions
+
+- Name.
+- How assumptions should be expressed: the term vocabulary
+  (`[:> :x 0]`) or a small predicate language.
+- The `:too-big` threshold for the polynomial analysis, and whether the
+  normal form is materialized into the e-graph as a node (so it can be
+  extracted) always, never, or only at the root.
+- Whether `:D` belongs in the term language (differentiation as
+  equality) or is a separate operation that calls into the engine.
+  The design above assumes the former because it is the more
+  interesting demonstration; the numeric oracle must then treat `:D`
+  nodes as unevaluable and skip them.
+
+## Appendix: term format trade-offs
+
+Three candidates were weighed before choosing. The core is agnostic
+through its term protocol; this is about the CAS's canonical data.
+
+**Tagged vectors** `[:+ [:* 2 :x] :y]`
+
+- Self-evaluating: no quoting anywhere in code, EDN, REPL, or data
+  files. Rule right-hand sides that compute a result are plain vector
+  literals with ordinary interpolation, no `list`/syntax-quote dance.
+- O(1) operator and positional child access; small vectors of
+  keywords and integers hash and compare fast and cache their hash on
+  the JVM.
+- Identical shape to e-nodes (children replaced by ids), so terms and
+  e-nodes share every helper.
+- Namespaced keyword operators (`:trig/sin`) give rule-set authors a
+  collision-free extension space.
+- Same shape as catalytic-buffer's ops and tree-evaluation's trees.
+- Costs: variables as keywords (`:x`) reads oddly to a Lisp
+  mathematician; named constants need a convention (nullary operator
+  `[:pi]` rather than a keyword, so it cannot be confused with a
+  variable); a vector literal as a leaf must be wrapped.
+
+**S-expressions** `'(+ (* 2 x) y)`
+
+- The Lisp/Emmy/scmutils tradition; `x` reads as x; near-free Emmy
+  interop; Clojure `eval` is a cheap evaluation oracle.
+- Costs: quoting everywhere, and syntax-quote namespaces symbols
+  (`` `(+ x y) `` reads as `(clojure.core/+ user/x user/y)`), a
+  perennial gotcha in rule code; lists are not indexed; and
+  `(= '(+ 1 2) [:+ 1 2])` is false but `(= '(+ 1 2) ['+ 1 2])` is true
+  (sequential equality), so lists and vectors would silently share
+  hashcons keys.
+
+**Maps or records** `{:op :+ :args [...]}`
+
+- Explicit and extensible with annotation slots.
+- Costs: unbearable to write by hand in rules and at the REPL. Clojure
+  metadata on vectors gives the same annotation ability without
+  affecting equality, which is exactly right for hashconsing.
+
+**Shared wart.** In every candidate an e-node `[:+ 4 7]` (classes 4
+and 7) and a term `[:+ 4 7]` (the integers) look alike. Inside the
+e-graph there is no ambiguity, because integer constants are leaf
+e-nodes with their own class ids and compound e-node children are
+always ids. The confusion is only for humans reading REPL output; the
+fix is a printer for classes that renders ids distinctly.
+
+**Patterns are a wash.** `?a` is a symbol in any representation, so a
+pattern needs one quote per side (`'[:+ ?a ?b]`) or a `rule` macro
+that quotes for you, as Emmy's does. Terms, not patterns, are where
+vectors win.
+
+**Decision.** The *data model* is an engineering choice and tagged
+vectors win it; decided 2026-09-13. The *surface syntax* people type
+is a UX choice and can be several, each a compiler to the canonical
+form, none required: an s-expression reader, an infix string parser,
+pretty-printers to infix or TeX. The audience being Clojure
+programmers, the canonical form *is* the primary syntax.
+
+## 10. Next: milestone 2
+
+Milestone 1 (section "Status" below) built the ring fragment. Next:
+
+1. **Normal-form rules** (section 3, answer 2): cromulent already
+   accepts a searcher function as a rule's left-hand side; write the
+   first ones for `trig` (`sin²u + cos²u` inside any sum) and measure
+   experiments 4 and 5 of ../design/ac-problem.md against them.
+2. `powers` and `exp-log` as ordinary rules; `derivative` with the
+   `no-D` cost.
+3. The sign lattice (section 4) and `:assume`, so conditional rules
+   fire soundly; `:assuming` in results stops being empty.
+4. `const` for non-ring operators the analysis can evaluate exactly
+   (`abs`, integer `gcd`); the polynomial analysis already folds ring
+   constants.
+5. Rational-function normal forms, or division under a nonzero
+   analysis: open.
+
+## Status
+
+Milestone 1 implemented 2026-09-13, tests green on JVM (Clojure 1.12)
+and Jolt v0.8.7 through `clojure -M:test` and `jolt -M:test` /
+`jolt test`, cromulent as a `:local/root` dependency:
+
+- `bendix.poly` — sparse multivariate polynomials over ℚ as plain
+  maps: arithmetic (promoting to bignums), `expt` by squaring with a
+  term-count limit, atom renaming, evaluation, a total order, and
+  rendering to canonical n-ary `:+`/`:*`/`:expt` terms.
+- `bendix.analysis` — the polynomial analysis of section 4 exactly as
+  ../design/ac-problem.md approach C specifies, with the "atoms move"
+  hard part resolved (ids canonicalized at every use, recompute in
+  the core, a well-founded order on forms); the index from normal form to
+  class in the analysis state; `inconsistency`, the dev-mode oracle.
+- `bendix.core` — `simplify` and `saturate`: add, run rules under the
+  analysis, materialize every class's normal form, extract under
+  `default-cost`. No rules ship yet; the analysis alone collects like
+  terms, folds constants, cancels, expands when that is smaller and
+  keeps the factored form when it is not.
+- Tests (23 tests, 106 assertions): polynomial arithmetic is a ring
+  homomorphism under evaluation at random rational points, rendered
+  terms evaluate to their polynomial, the order is total and
+  compares coefficients by size, linear equations in one atom are
+  recognized; like terms,
+  cancellation, four spellings of a + b + c in one class with only the
+  nodes that were written, opaque atoms, atoms moving under a union,
+  `:too-big`, `:conflict`, assumptions settling on the smaller form,
+  determining equations solved (a = a/2 and a = −a give a = 0, a = 2a + 1
+  gives a = −1, x = y + 1 stays an assumption); experiment 3 (the
+  oracle names the wrong rule);
+  invariants hold with the analysis on random scripts; every
+  arrangement of a sum is one class; `simplify` preserves value at
+  random rational points, never grows a term, and its cost is a
+  fixpoint; the graph behind it is well-formed.
+- `bench/` — experiment 2 (table in ../design/ac-problem.md) and
+  three simplifier timings, all under 10 ms.
+
+Not yet: everything in section 10, other syntaxes, explanations.
