@@ -1,6 +1,6 @@
 (ns bendix.bench
-  "Experiments 2, 4, 5 and 6 of ../design/ac-problem.md and simplifier
-  timings, run the same way on both runtimes:
+  "Experiments 2, 4, 5 and 6 of ../design/ac-problem.md, simplifier
+  timings and derivative timings, run the same way on both runtimes:
 
      clojure -M:bench        jolt -M:bench"
   (:require [bendix.analysis :as an]
@@ -98,6 +98,9 @@
 (defn- mentions-trig? [t]
   (and (vector? t) (or (contains? #{:sin :cos} (nth t 0)) (some mentions-trig? (rest t)))))
 
+(defn- mentions? [op t]
+  (and (vector? t) (or (= op (nth t 0)) (some #(mentions? op %) (rest t)))))
+
 (defn buried-trig-ac
   "The same input under approach A on a plain e-graph (no analysis):
   the :simple scheduler, no limits, extraction by AST size. Reached
@@ -182,6 +185,36 @@
                 (let [missed (remove #(= "reached" (:note %)) rows)]
                   (if (seq missed) (str "; " (pr-str (map :fixture missed))) "")))}))
 
+;; ---------------------------------------------------------------------------
+;; derivatives: a wide sum and a deep nesting
+
+(defn derivative-row
+  "differentiate t with respect to x, with the e-graph and the
+  iteration count kept. n is the iteration count; expected is a
+  predicate on the result."
+  [label t expected]
+  (let [[ms {:keys [egraph root stop-reason iterations]}] (timed #(bx/saturate [:D t :x] {:rules rules/derivative}))
+        g (bx/materialize-all egraph)
+        {:keys [term]} (ex/extract g root bx/no-D)]
+    {:fixture (str "d/dx " label) :n iterations :ms ms
+     :nodes (eg/node-count g) :classes (eg/class-count g)
+     :note (if (and (= :saturated stop-reason) (expected term)) "reached" (str "NOT reached: " (pr-str term)))}))
+
+(defn wide-sum
+  "Σ sin(i·x) for i = 1..n: n placeholders in one class in one step,
+  then one chain rule each, at O(n) nodes and a fixed iteration count."
+  [n]
+  (derivative-row (str "sum of " n " sines")
+                  (nested-sum (map (fn [i] [:sin [:* i :x]]) (range 1 (inc n))))
+                  (fn [t] (and (= :+ (nth t 0)) (= n (dec (count t))) (not (mentions? :D t))))))
+
+(defn deep-nesting
+  "sin(sin(... sin x)) n deep: one iteration per level."
+  [n]
+  (derivative-row (str "sin nested " n " deep")
+                  (nth (iterate (fn [t] [:sin t]) :x) n)
+                  (fn [t] (and (= :* (nth t 0)) (= n (dec (count t))) (not (mentions? :D t))))))
+
 (defn- row [{:keys [fixture n ms nodes classes note]}]
   (println (format "%-28s n=%-5d %8.1f ms   nodes=%-6d classes=%-6d %s" fixture n (double ms) nodes classes (or note ""))))
 
@@ -206,4 +239,7 @@
   (row (preference-row "lowest-degree" an/lowest-degree))
   (row (preference-row "fewest-atoms" an/fewest-atoms))
   (row (preference-row "most-terms" (an/most-terms 200)))
+  (println "derivatives")
+  (doseq [n [10 100]] (row (wide-sum n)))
+  (doseq [n [5 20]] (row (deep-nesting n)))
   (System/exit 0))

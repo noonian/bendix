@@ -18,11 +18,19 @@
   power; `powers` holds it. `combine-exp` is its mirror image: in
   every monomial, the factors that are powers of exponentials become
   one exponential of the sum of their arguments; `exp-log` holds it
-  with the pattern rule `log-of-exp`."
+  with the pattern rule `log-of-exp`.
+
+  `derivative` (IDEA.md section 3, \"Differentiation\") differentiates:
+  `ring-derivative` is a normal-form rule over the pattern [:D ?u ?x]
+  that computes the total derivative of ?u's polynomial, so linearity,
+  the product rule and folded powers are polynomial calculus and not
+  rules; the chain rule is one pattern rule per operator; and
+  `independent` is [:D ?u ?x] = 0 when ?u cannot depend on ?x."
   (:require [bendix.analysis :as an]
             [bendix.poly :as poly]
             [bendix.term :as bt]
             [cromulent.core :as eg]
+            [cromulent.pattern :as pat]
             [cromulent.rewrite :as rw]
             [cromulent.term :as term]))
 
@@ -50,27 +58,45 @@
                                        :else a)))]
     [pattern bindings]))
 
+(defn- matches-for
+  "One match per polynomial, carrying its rendering as :rhs and the
+  rendering's bindings merged into the match's."
+  [class bindings polys]
+  (map (fn [p']
+         (let [[pattern b] (render p')]
+           {:class class :bindings (merge bindings b) :rhs pattern}))
+       (distinct polys)))
+
 (defn normal-form-rule
   "A rule whose left-hand side is f, (fn [g id p] polys): the other
   polynomials the class id, whose canonical form is p, is worth. f
   sees every class whose data is a polynomial, and every opaque class
   as its unit polynomial {{id 1} 1}, and may return nil. Each
-  polynomial becomes one match carrying its rendering as :rhs."
-  [name f]
-  (rw/rule name
-           (fn [g]
-             (into []
-                   (mapcat (fn [r]
-                             (let [d (an/canonical g (eg/data g r :poly))
-                                   p (cond (an/polynomial? d) d
-                                           (an/atom? d) (poly/variable (:atom d)))]
-                               (when p
-                                 (map (fn [p']
-                                        (let [[pattern bindings] (render p')]
-                                          {:class r :bindings bindings :rhs pattern}))
-                                      (distinct (f g r p)))))))
-                   (eg/roots g)))
-           nil))
+  polynomial becomes one match carrying its rendering as :rhs.
+
+  With a pattern, f is (fn [g bindings] polys) and sees the pattern's
+  matches instead of every root: the polynomials the matched class is
+  worth, given what the pattern bound."
+  ([name f]
+   (rw/rule name
+            (fn [g]
+              (into []
+                    (mapcat (fn [r]
+                              (let [d (an/canonical g (eg/data g r :poly))
+                                    p (cond (an/polynomial? d) d
+                                            (an/atom? d) (poly/variable (:atom d)))]
+                                (when p
+                                  (matches-for r {} (f g r p))))))
+                    (eg/roots g)))
+            nil))
+  ([name pattern f]
+   (rw/rule name
+            (fn [g]
+              (into []
+                    (mapcat (fn [{:keys [class bindings]}]
+                              (matches-for class bindings (f g bindings))))
+                    (pat/ematch g pattern)))
+            nil)))
 
 ;; ---------------------------------------------------------------------------
 ;; pythagoras
@@ -273,6 +299,144 @@
   log(ab) = log a + log b wait for the sign lattice (IDEA.md
   section 5)."
   [combine-exp log-of-exp])
+
+;; ---------------------------------------------------------------------------
+;; derivative
+
+(defn- undefined-variable
+  "The variable the class of id is, when it holds a variable leaf and
+  is worth that variable and nothing else; nil otherwise."
+  [g id]
+  (let [d (an/canonical g (eg/data g id :poly))]
+    (when (an/polynomial? d)
+      (some (fn [n] (when (and (bt/variable? n) (= (poly/variable n) d)) n))
+            (eg/nodes g id)))))
+
+(defn- constant-data
+  "The constant the class of id is worth, or nil."
+  [g id]
+  (let [d (an/canonical g (eg/data g id :poly))]
+    (when (an/polynomial? d) (poly/constant-value d))))
+
+(defn derivative-form
+  "The total derivative of the polynomial p with respect to the
+  variable x, whose class is xid: Σ ∂p/∂a · D(a) over the atoms a of
+  p, with D(x) = 1, D(y) = 0 for another variable (canonical forms
+  are spelled over undefined atoms, which are independent of x by
+  convention) and D(c) = the placeholder [:D c x] for an opaque
+  class c."
+  [p x xid]
+  (poly/sum (keep (fn [a]
+                    (cond
+                      (= a x) (poly/derivative p a)
+                      (bt/variable? a) nil
+                      :else (poly/mul (poly/derivative p a)
+                                      (poly/variable (bt/placeholder :D [(bt/class-ref a) (bt/class-ref xid)])))))
+                  (poly/atoms p))))
+
+(defn ring-derivative-forms
+  "The polynomial rewrite behind `ring-derivative`: for a match of
+  [:D ?u ?x] where ?x is an undefined variable and ?u's canonical
+  data is a polynomial, that polynomial's total derivative. Declines
+  when ?u is opaque (the chain rules' case), :too-big or :conflict."
+  [g bindings]
+  (let [xid (get bindings '?x)
+        uid (get bindings '?u)]
+    (when-let [x (undefined-variable g xid)]
+      (let [d (an/canonical g (eg/data g uid :poly))]
+        (when (an/polynomial? d)
+          [(derivative-form d x xid)])))))
+
+(def ring-derivative
+  "The derivative of a class worth a polynomial, computed from the
+  polynomial: linearity, the product rule and the power rule for the
+  exponents the analysis folds never run as rules."
+  (normal-form-rule "ring-derivative" '[:D ?u ?x] ring-derivative-forms))
+
+(defn independent?
+  "Can the value of the class of id not depend on the undefined
+  variable x? Yes when its canonical polynomial mentions no atom that
+  depends on x, an undefined variable depending on x only when it is
+  x; or, for an opaque or :too-big class, when some constant leaf or
+  compound node of the class has only children that cannot depend on
+  x. A :conflict class, a variable leaf in a class with other data
+  and a class already on the walk count as depending."
+  [g id x]
+  (letfn [(indep? [id visited]
+            (let [r (eg/find g id)]
+              (if (contains? visited r)
+                false
+                (let [visited (conj visited r)
+                      d (an/canonical g (eg/data g r :poly))]
+                  (cond
+                    (an/polynomial? d)
+                    (every? (fn [a] (if (bt/variable? a) (not= a x) (indep? a visited)))
+                            (poly/atoms d))
+                    (= :conflict d) false
+                    :else
+                    (boolean (some (fn [n]
+                                     (cond
+                                       (bt/constant? n) true
+                                       (term/compound? n) (every? #(indep? % visited) (term/children n))
+                                       :else false))
+                                   (eg/nodes g r))))))))]
+    (indep? id #{})))
+
+(def independent
+  "[:D u x] = 0 when u cannot depend on x: d/dx π, d/dx |y|, d/dx f(y)
+  for any operator f."
+  (rw/rule "independent" '[:D ?u ?x] 0
+           :when (fn [g bindings]
+                   (let [x (undefined-variable g (get bindings '?x))]
+                     (and (some? x) (independent? g (get bindings '?u) x))))))
+
+(def d-sin (rw/rule "d-sin" '[:D [:sin ?u] ?x] '[:* [:cos ?u] [:D ?u ?x]]))
+(def d-cos (rw/rule "d-cos" '[:D [:cos ?u] ?x] '[:* -1 [:sin ?u] [:D ?u ?x]]))
+(def d-exp (rw/rule "d-exp" '[:D [:exp ?u] ?x] '[:* [:exp ?u] [:D ?u ?x]]))
+(def d-log
+  "Spelled as a negative power, so `powers` can combine it."
+  (rw/rule "d-log" '[:D [:log ?u] ?x] '[:* [:expt ?u -1] [:D ?u ?x]]))
+
+(def d-quotient
+  "(a'b − ab')·b⁻², for the divisions the analysis holds as atoms:
+  division by a constant is a ring operation and needs no rule."
+  (rw/rule "d-quotient" '[:D [:/ ?a ?b] ?x]
+           '[:* [:- [:* [:D ?a ?x] ?b] [:* ?a [:D ?b ?x]]] [:expt ?b -2]]
+           :when (fn [g bindings] (nil? (constant-data g (get bindings '?b))))))
+
+(def d-power
+  "n·u^(n−1)·u' for a non-zero constant n. For a non-negative integer
+  n the analysis has folded the power and `ring-derivative` covers
+  it, but the factored spelling this proposes is one the class would
+  not otherwise hold. When u' is a constant the rule folds it in, so
+  3(x+1)² carries no ·1."
+  (rw/rule "d-power" '[:D [:expt ?u ?n] ?x]
+           (fn [g bindings]
+             (let [n (constant-data g (get bindings '?n))
+                   xid (get bindings '?x)
+                   x (undefined-variable g xid)
+                   d (when x (an/canonical g (eg/data g (get bindings '?u) :poly)))
+                   du (when (an/polynomial? d) (poly/constant-value (derivative-form d x xid)))]
+               (cond
+                 (or (nil? n) (zero? n)) nil
+                 (nil? du) [:* n [:expt '?u (- n 1)] [:D '?u '?x]]
+                 (zero? du) 0
+                 :else [:* (*' n du) [:expt '?u (- n 1)]])))))
+
+(def d-power-symbolic
+  "u^v (v·u'/u + log u · v'), spelled v·u^(v−1)·u' + u^v·log u·v', for
+  an exponent that is not a constant; when v cannot depend on x the
+  second term is a product with a class worth zero and the analysis
+  drops it. Holds where u > 0 (IDEA.md section 5)."
+  (rw/rule "d-power-symbolic" '[:D [:expt ?u ?v] ?x]
+           '[:+ [:* ?v [:expt ?u [:+ ?v -1]] [:D ?u ?x]]
+                [:* [:expt ?u ?v] [:log ?u] [:D ?v ?x]]]
+           :when (fn [g bindings] (nil? (constant-data g (get bindings '?v))))))
+
+(def derivative
+  "The derivative rule set. A :D no rule removes stays; `bendix.core/no-D`
+  counts it and `differentiate` reports it."
+  [ring-derivative independent d-sin d-cos d-exp d-log d-quotient d-power d-power-symbolic])
 
 ;; ---------------------------------------------------------------------------
 ;; the oracle for this rule set

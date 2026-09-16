@@ -39,6 +39,18 @@ keywords elsewhere are variables, numbers are exact.
 
 (simplify [:* [:exp [:+ :x :y]] [:exp [:* -1 :y]]] {:rules rules/exp-log})
 ;; => {:result [:exp :x] ...}                    ; the arguments cancel in the ring
+
+(require '[bendix.core :refer [differentiate]])
+
+(differentiate [:sin [:* 2 :x]] :x)
+;; => {:result [:* 2 [:cos [:* 2 :x]]] :cost [0 385/64] ... :undifferentiated #{}}
+
+(differentiate [:* :x [:sin :x]] :x)
+;; => {:result [:+ [:* :x [:cos :x]] [:sin :x]] ...}   ; the product rule is polynomial calculus
+
+(differentiate [:* :x [:abs :x]] :x)
+;; => {:result [:+ [:* :x [:D [:abs :x] :x]] [:abs :x]] :cost [129/64 ...]
+;;     :undifferentiated #{[:D [:abs :x] :x]} ...}     ; no rule for abs: the derivative stays, and says so
 ```
 
 The commutative-ring identities are not rewrite rules. A polynomial
@@ -60,7 +72,11 @@ exponentials; `bendix.rules/normal-form-rule` builds more of them.
 what "simplest" means is yours to decide. `:prefer` decides which of
 two forms a class keeps inside the analysis, as a measure into
 natural numbers so that termination is never in question
-(`bendix.analysis/fewest-terms` is the default).
+(`bendix.analysis/fewest-terms` is the default). `differentiate` is
+`simplify` of `[:D t x]` under `bendix.rules/derivative`, where the
+ring part of a derivative is computed from the class's normal form
+and the chain rule is one pattern rule per operator, extracted under
+`no-D`, a cost that counts what is still under a `:D` before size.
 
 ## Running
 

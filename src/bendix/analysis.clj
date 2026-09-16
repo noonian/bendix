@@ -194,9 +194,14 @@
                                   (= 2 n) (poly/sub (nth ps 0) (nth ps 1))
                                   :else nil)
                          :expt (when (= 2 n)
-                                 (let [e (poly/constant-value (nth ps 1))]
-                                   (when (and e (integer? e) (not (neg? e)))
-                                     (or (poly/expt (nth ps 0) e too-big) ::too-big))))
+                                 (let [e (poly/constant-value (nth ps 1))
+                                       k (poly/constant-value (nth ps 0))]
+                                   (cond
+                                     (not (and e (integer? e))) nil
+                                     (not (neg? e)) (or (poly/expt (nth ps 0) e too-big) ::too-big)
+                                     ;; a non-zero constant to a negative integer power is a constant
+                                     (and k (not (zero? k))) (poly/constant (/ 1 (reduce *' 1 (repeat (- e) k))))
+                                     :else nil)))
                          :/ (when (= 2 n)
                               (let [k (poly/constant-value (nth ps 1))]
                                 (when (and k (not (zero? k)))
@@ -222,12 +227,47 @@
           (cons (eg/data g r :poly)
                 (map #(make g (eg/canonicalize g %) r) (:nodes (eg/eclass g r)))))))
 
+(defn- unit-atom
+  "The class id c when the polynomial d is c to the first power with
+  coefficient 1 and nothing else: the form a class worth exactly the
+  class c computes (sin x · 1). nil otherwise."
+  [d]
+  (when (and (polynomial? d) (= 1 (count d)))
+    (let [[m c] (first d)]
+      (when (and (= 1 c) (= 1 (count m)))
+        (let [[a e] (first m)]
+          (when (and (= 1 e) (bt/class-id? a)) a))))))
+
+(defn- index-form
+  "Union the class of id with the class the index holds under the
+  form f, if another; else index f under id. Returns g'."
+  [g id f]
+  (let [r (eg/find g id)
+        other (get-in g [:analysis-state :poly f])]
+    (if (and other (not= (eg/find g other) r))
+      (first (eg/union g other r))
+      (assoc-in g [:analysis-state :poly f] r))))
+
 (defn- solve
-  "Every equation between two forms of one class that is linear in a
+  "The equations the forms of the class id assert, used. Every form
+  is indexed, not only the one the class keeps, so two classes that
+  share any canonical form merge whatever representatives their joins
+  chose (a proposed form whose placeholder atom is fresh when its node
+  is created is missed by `modify` and only later spelled with the
+  atom it merges with; the derivative's soak found two such classes
+  apart). A form that is exactly another class's atom identifies the
+  class with it. Every equation between two forms that is linear in a
   single atom determines that atom: union it with the constant.
   Returns g'."
-  [g forms]
-  (let [fs (into [] (comp (map #(canonical g %)) (filter polynomial?) (distinct)) forms)]
+  [g id forms]
+  (let [fs (into [] (comp (map #(canonical g %)) (filter polynomial?) (distinct)) forms)
+        g (reduce (fn [g f] (index-form g id f)) g fs)
+        g (reduce (fn [g f]
+                    (if-let [c (unit-atom f)]
+                      (if (= (eg/find g c) (eg/find g id)) g (first (eg/union g c id)))
+                      g))
+                  g
+                  fs)]
     (reduce (fn [g [p q]]
               (if-let [[v value] (poly/linear-in-one-atom (poly/sub p q))]
                 (let [[g vid] (if (bt/variable? v) (eg/add g v) [g v])
@@ -269,21 +309,6 @@
       (throw (ex-info ":prefer must return a vector of natural numbers" {:key k :polynomial p})))
     k))
 
-(defn- own-atom
-  "The class id a form stands for when it is that atom and nothing
-  else: {:atom id}, or the polynomial that is one class-id atom to the
-  first power with coefficient 1 (what `sin x · 1` computes, and what
-  the index then unions with the class of `sin x`). nil otherwise."
-  [d]
-  (cond
-    (atom? d) (:atom d)
-    (and (polynomial? d) (= 1 (count d)))
-    (let [[m c] (first d)]
-      (when (and (= 1 c) (= 1 (count m)))
-        (let [[a e] (first m)]
-          (when (and (= 1 e) (bt/class-id? a)) a))))
-    :else nil))
-
 (defn- defines?
   "Does the polynomial d define the atom id? A form that does not
   mention the atom does (exp(x)·exp(y) for exp(x + y), 1 − x for
@@ -292,6 +317,23 @@
   [d id]
   (and (polynomial? d) (not (contains? (poly/atoms d) id))))
 
+(defn- opaque-count
+  "How many atoms of p are opaque classes rather than variables."
+  [p]
+  (count (filter bt/class-id? (poly/atoms p))))
+
+(defn- built-in-smaller
+  "The smaller of a and b under the analysis's own order: fewer opaque
+  atoms first, then bendix.poly's order. A form over variables alone
+  is the class's value; one over unknowns is not, whatever its term
+  count (the derivative's soak found a root worth 2x + 2 keeping
+  e^-u · D(e^u), one term over two unknowns, and its parents with it)."
+  [a b]
+  (let [c (compare (opaque-count a) (opaque-count b))]
+    (cond (neg? c) a
+          (pos? c) b
+          :else (poly/smaller a b))))
+
 (defn- preferred
   "The form a class keeps of two polynomials: without a measure, the
   smaller under the built-in order; with one, the smaller key, shorter
@@ -299,11 +341,11 @@
   of naturals is well-founded, and ties go to the built-in order."
   [prefer a b]
   (if (nil? prefer)
-    (poly/smaller a b)
+    (built-in-smaller a b)
     (let [c (compare (measure-key prefer a) (measure-key prefer b))]
       (cond (neg? c) a
             (pos? c) b
-            :else (poly/smaller a b)))))
+            :else (built-in-smaller a b)))))
 
 ;; ---------------------------------------------------------------------------
 ;; the analysis
@@ -326,41 +368,39 @@
               (term/compound? node) (let [r (ring-op g node too-big)]
                                       (if (= ::opaque r) {:atom id} r))
               :else {:atom id}))
-    ;; an atom, {:atom id} or its unit polynomial, is below :too-big
-    ;; and below any form that defines it; a form that mentions the
-    ;; atom is an equation, and the atom stays
+    ;; an atom {:atom id} is below :too-big and below any form that
+    ;; defines it; a form that mentions the atom is an equation, and
+    ;; the atom stays. The unit polynomial of another class (sin x · 1
+    ;; computes {{S 1} 1}) is an ordinary form: it says the class is
+    ;; worth that class, which `solve` and the index act on, and it
+    ;; is not an atom that yields to a definition (the derivative's
+    ;; soak found [:D c x] beside −(−sin x) keeping its own name, and
+    ;; a root worth e^y keeping e^-u·D(e^u) instead)
     :merge (fn [g a b]
-             (let [a (canonical g a), b (canonical g b)
-                   ia (own-atom a), ib (own-atom b)]
+             (let [a (canonical g a), b (canonical g b)]
                (cond
                  (= a b) a
                  (or (= :conflict a) (= :conflict b)) :conflict
-                 (and ia ib) (if (= ia ib)
-                               {:atom ia}
-                               (preferred prefer (poly/variable ia) (poly/variable ib)))
-                 ia (if (or (not (polynomial? b)) (defines? b ia)) b a)
-                 ib (if (or (not (polynomial? a)) (defines? a ib)) a b)
+                 (and (atom? a) (atom? b)) (if (= (:atom a) (:atom b))
+                                             a
+                                             (preferred prefer (poly/variable (:atom a)) (poly/variable (:atom b))))
+                 (atom? a) (if (or (not (polynomial? b)) (defines? b (:atom a))) b a)
+                 (atom? b) (if (or (not (polynomial? a)) (defines? a (:atom b))) a b)
                  (or (= :too-big a) (= :too-big b)) :too-big
                  :else (let [d (poly/sub a b)]
                          (if (poly/constant? d)
                            :conflict
                            (preferred prefer a b))))))
-    :reconcile (fn [g _ datas] (solve g datas))
+    :reconcile (fn [g id datas] (solve g id datas))
     ;; every class is indexed under its canonical form, an opaque class
     ;; under its own atom, so a class worth exactly sin x (sin x · 1) is
-    ;; the class of sin x
+    ;; the class of sin x; `solve` indexes the other forms
     :modify (fn [g id]
               (let [d (canonical g (eg/data g id :poly))
                     g (note-defined-variables g id d)
                     key (cond (polynomial? d) d
                               (atom? d) (poly/variable (:atom d)))]
-                (if-not key
-                  g
-                  (let [r (eg/find g id)
-                        other (get-in g [:analysis-state :poly key])]
-                    (if (and other (not= (eg/find g other) r))
-                      (first (eg/union g other r))
-                      (assoc-in g [:analysis-state :poly key] r))))))}))
+                (if key (index-form g id key) g)))}))
 
 (defn inconsistency
   "nil when every class is consistent, else a map describing the first

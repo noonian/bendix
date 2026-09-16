@@ -55,6 +55,16 @@
   (is (= (p/constant 8) (p/substitute (p/expt x 3) {:x (p/constant 2)})))
   (is (nil? (p/substitute (p/expt x 20) {:x (p/add x y)} 5)) "past the limit"))
 
+(deftest derivative-examples
+  (is (= {{:x 1} 2} (p/derivative (p/mul x x) :x)) "d/dx x² = 2x")
+  (is (= {{:x 2} 3} (p/derivative (p/expt x 3) :x)))
+  (is (= y (p/derivative (p/mul x y) :x)) "y is held constant")
+  (is (= p/zero (p/derivative y :x)))
+  (is (= p/zero (p/derivative one :x)))
+  (is (= one (p/derivative x :x)))
+  (is (= {{:x 1} 2, {} 1} (p/derivative (p/add (p/mul x x) (p/add x one)) :x)) "x² + x + 1")
+  (is (= {{:x 1, :y 2} 2} (p/derivative (p/mul (p/mul x x) (p/mul y y)) :x)) "x²y²"))
+
 (deftest linear-equations
   (is (= [:x 0] (p/linear-in-one-atom (p/scale x 1/2))))
   (is (= [:x -1] (p/linear-in-one-atom (p/add x one))))
@@ -164,7 +174,9 @@
               :- (if (= 1 (count vs)) (v- (first vs)) (reduce v- vs))
               :neg (v- (first vs))
               :expt (v-expt (first vs) (second vs))
-              :/ (v* (first vs) (/ 1 (rational (second vs) "division by an exponential")))
+              :/ (let [d (rational (second vs) "division by an exponential")]
+                   (when (zero? d) (undefined "division by zero" {}))
+                   (v* (first vs) (/ 1 d)))
               :sin (let [v (rational (first vs) "sin of an exponential")] (/ (*' 2 v) (+' 1 (*' v v))))
               :cos (let [v (rational (first vs) "cos of an exponential")] (/ (-' 1 (*' v v)) (+' 1 (*' v v))))
               :exp (v-exp (first vs))
@@ -209,6 +221,23 @@
                (let [env' (assoc env :x (p/evaluate sx env) :y (p/evaluate sy env))]
                  (= (p/evaluate a env')
                     (p/evaluate (p/substitute a {:x sx :y sy}) env)))))]
+    (is (:pass? res) (pr-str res))))
+
+(deftest derivative-is-linear-and-leibniz
+  ;; linearity, the Leibniz rule and the values on atoms characterize
+  ;; the partial derivative; symmetry of mixed partials is a check on
+  ;; top
+  (let [res (tc/quick-check
+             200
+             (prop/for-all [a poly-gen, b poly-gen, k (gen/elements [2 -1 1/3])]
+               (let [D #(p/derivative % :x)]
+                 (and (= (p/add (D a) (D b)) (D (p/add a b)))
+                      (= (p/scale (D a) k) (D (p/scale a k)))
+                      (= (p/add (p/mul (D a) b) (p/mul a (D b))) (D (p/mul a b)))
+                      (= one (D x))
+                      (= p/zero (D y))
+                      (= p/zero (D (p/constant k)))
+                      (= (p/derivative (D a) :y) (D (p/derivative a :y)))))))]
     (is (:pass? res) (pr-str res))))
 
 (deftest compare-is-a-total-order

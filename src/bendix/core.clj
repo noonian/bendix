@@ -8,9 +8,17 @@
   Options: :rules (default none), :cost (default `default-cost`),
   :dev? (check the normal forms after every rule application and
   throw naming the rule), :too-big and :prefer for the analysis
-  (bendix.analysis/poly-analysis), and the runner's limits."
+  (bendix.analysis/poly-analysis), and the runner's limits.
+
+    (differentiate [:sin [:* 2 :x]] :x)
+    ;; => {:result [:* 2 [:cos [:* 2 :x]]] :cost [0 385/64] ... :undifferentiated #{}}
+
+  is `simplify` of [:D t x] under the derivative rules and `no-D`, a
+  cost that counts what is still under a :D before size (IDEA.md
+  section 3, \"Differentiation\")."
   (:require [bendix.analysis :as an]
             [bendix.poly :as poly]
+            [bendix.rules :as rules]
             [bendix.term :as bt]
             [cromulent.core :as eg]
             [cromulent.extract :as ex]
@@ -33,6 +41,22 @@
        65/64
        1)
      (reduce + child-costs)))
+
+(defn no-D
+  "A vector cost, [undifferentiated size]: the sizes of the arguments
+  of every :D node summed, then `default-cost`. Compared
+  lexicographically by the extractor, so a derivative pushed inward
+  always beats the same derivative left whole, a derivative-free
+  spelling beats any other, and the cheapest of those wins. Monotone:
+  the first component never decreases from a child to its parent and
+  the second strictly increases."
+  [node child-costs]
+  (let [size (default-cost node (mapv second child-costs))
+        under (reduce + 0 (map first child-costs))]
+    [(if (and (term/compound? node) (= :D (term/operator node)) (pos? (term/arity node)))
+       (+ under (second (nth child-costs 0)))
+       under)
+     size]))
 
 (defn materialize
   "Add the normal form of the class of id as a term and union it in,
@@ -89,3 +113,26 @@
          (throw (ex-info "inconsistent normal forms after materialization" problem))))
      (let [{:keys [term cost]} (ex/extract g root cost)]
        {:result term :cost cost :stop stop-reason :assuming #{}}))))
+
+(defn- subterms-with
+  "The set of subterms of t headed by op."
+  [op t]
+  (if (term/compound? t)
+    (into (if (= op (term/operator t)) #{t} #{})
+          (mapcat #(subterms-with op %))
+          (term/children t))
+    #{}))
+
+(defn differentiate
+  "The derivative of t with respect to the variable x: `simplify` of
+  [:D t x] under `bendix.rules/derivative` together with the caller's
+  :rules, extracted under `no-D`. The result adds :undifferentiated,
+  the set of :D subterms no rule could remove, empty when the
+  derivative is complete."
+  ([t x] (differentiate t x {}))
+  ([t x opts]
+   (when-not (bt/variable? x)
+     (throw (ex-info "the variable of differentiation must be a variable" {:variable x})))
+   (let [rules (into [] (distinct) (concat rules/derivative (:rules opts)))
+         res (simplify [:D t x] (assoc opts :rules rules :cost no-D))]
+     (assoc res :undifferentiated (subterms-with :D (:result res))))))

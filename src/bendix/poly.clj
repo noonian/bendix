@@ -99,6 +99,20 @@
                 zero
                 p))))
 
+(defn derivative
+  "∂p/∂a: the partial derivative of p with respect to the atom a,
+  every other atom held constant. Each monomial holding a^e becomes
+  the monomial with a^(e−1) and its coefficient times e; a polynomial
+  that does not mention a gives zero."
+  [p a]
+  (reduce-kv (fn [acc m c]
+               (let [e (get m a 0)]
+                 (if (zero? e)
+                   acc
+                   (add-term acc (if (= 1 e) (dissoc m a) (assoc m a (dec e))) (*' c e)))))
+             zero
+             p))
+
 (defn sum [ps] (reduce add zero ps))
 
 (defn product [ps] (reduce mul (constant 1) ps))
