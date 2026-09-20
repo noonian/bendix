@@ -80,8 +80,9 @@ them as rules would reintroduce the 3ⁿ blowup.
 - `powers`: `[:expt ?x 0] = 1`, `[:expt [:expt ?x ?m] ?n] = [:expt ?x [:* ?m ?n]]`
   (integer exponents only, unconditionally), `[:* [:expt ?x ?m] [:expt ?x ?n]] = [:expt ?x [:+ ?m ?n]]`.
   Built as one normal-form rule over monomials (`combine-powers`,
-  section "Status"): the analysis already folds non-negative integer
-  exponents, so the rule handles the powers it holds as atoms.
+  designed below under "Normal-form rules"): the analysis already
+  folds non-negative integer exponents, so the rule handles the
+  powers it holds as atoms, and proposes two canonical forms.
 - `exp-log`: `[:* [:exp ?a] [:exp ?b]] = [:exp [:+ ?a ?b]]` and
   `[:expt [:exp ?a] ?n] = [:exp [:* ?n ?a]]`, built as one normal-form
   rule over monomials (`combine-exp`, section 10 item 1, the mirror
@@ -203,6 +204,73 @@ Experiments 4 and 5 (../design/ac-problem.md) measure whether this
 reaches the textbook results inside arbitrarily arranged sums at O(n)
 nodes, so that bag nodes (answer 3) are not needed for the CAS
 milestone.
+
+**`combine-powers`**, the second one. In every monomial the factors
+that are powers of one base are a group (`factor`: a bare atom is its
+own base to the first power, an `[:expt B E]` atom is `B` to `E`),
+and the group's exponent is a polynomial: the constants of the
+factors plus the canonical forms of their symbolic exponents, so the
+`1` of `n + 1` is a constant there. Modulo the power law a group has
+two canonical forms, and the rule proposes both, as `pythagoras`
+proposes two:
+
+- **one power per base**, `B^(k + S)`: the placeholder
+  `[:expt B (k + Σ c·S)]`, whose exponent the analysis normalizes;
+- **the integer part in the ring**, `B^k · B^S`: when `k` is a
+  positive integer, `S` is not zero and `B` is one atom, `B^k` goes
+  back into the monomial's degree and the rest is one power, the
+  group's own atom when it already holds `B^S` and a placeholder
+  otherwise. A negative or rational `k` is not split: `y⁻¹` is an
+  atom of its own, and `y⁻¹·yⁿ` is never the cheaper spelling.
+
+Why two. Under AST size the spellings are within a node of each
+other, and the winner depends on what is already paid for: beside
+another factor, `y·yⁿ` (the `:*` exists, the exponent's `:+` does
+not) is a node cheaper than `y^(n+1)`; alone they tie; at an offset
+of 2, a negative offset, a second symbol in the exponent or an
+opaque base the combined power wins or ties. No single canonical
+form tracks that. With the first form alone the cheaper spelling
+existed only when the input or another rule's rendering happened to
+hold it: `[:* :a :y [:expt :y :n]]` stayed at 6 and
+`[:* :a [:expt :y [:+ :n 1]]]` at 7, and `simplify` of a result
+could be cheaper than the result (found by the suite on Jolt,
+2026-09-16; seed `1789597929120` on the JVM: on the second pass
+`pythagoras` rendered the monomial `x⁵·y·yⁿ` while proposing a
+sine-free form, `combine-powers` merged it into the class of
+`x⁵·y^(n+1)`, and extraction found it). The defect was canonicity,
+equal inputs with different answers, and the cost fixpoint was the
+part of it a test could see. With both forms proposed the candidates
+for extraction are a function of the class's value, and the cost
+chooses, as it does between `sin²x` and `1 − cos²x` (section 6).
+
+What it does to the analysis: when the rule visits the class of
+`y^(n+1)` itself, the split form `y·yⁿ` *defines* that atom (section
+4, merge), so forms are spelled over `yⁿ` from then on and two
+classes worth `x⁵·y·yⁿ` and `x⁵·y^(n+1)` meet in the index. The same
+happened before whenever the input wrote `y·yⁿ` as a class of its
+own. Both rewrites are idempotent, so the rule set saturates as
+`pythagoras` does. Experiment 7 (../design/ac-problem.md) measures
+the second form: no node or time cost where no exponent has an
+integer offset, the same node count and two to two and a half times
+the time on a sum of a hundred monomials that each have one.
+
+Considered and not built: a separate `split-powers` rule (the second
+form as an inverse rule: two rules to keep in step, and no
+completeness argument of its own); one form tuned to the cost
+("an offset of 1 out, any other in": the arithmetic of AST size
+inside a rule); a cost that charges the exponent's `:+` less (a
+cromulent cost sees a node and its children's costs, never its
+parent, and `simplify` could then grow a term); splitting at
+materialization (knowledge of powers in `bendix.core`). Folding the
+power law into the analysis, symbolic powers as Laurent monomials,
+so that no rule is needed and the spelling is `->term`'s, is the
+larger alternative and belongs with section 10 item 4.
+
+**Limit.** A compound base is expanded by the ring before the rule
+sees it: `(x + 1)·(x + 1)ⁿ` is `x·A + A`, no monomial holds two
+powers of `x + 1`, and it stays at 9 where `(x + 1)^(n+1)` stays at
+7. Closing that needs the base recognized inside a polynomial
+(division by the base's form), which is not built.
 
 ### Differentiation
 
@@ -497,8 +565,11 @@ The equation is kept as an assumption the graph made, not a bug:
 `sin²x + cos²x` joined with `1` is a true identity the ring cannot
 see, and `x = y + 1` is a user assertion.
 
-**Which form is preferred is a policy, pluggable within a family that
-keeps the guarantees.** The default is the smaller under a total order
+**Which form is preferred is fixed for the simplifier: the built-in
+order.** A measure can be put in front of it, and the family of
+measures keeps the analysis's guarantees, but that is an experiment's
+knob and not an option of `simplify` (below). The built-in order is
+the smaller under a total order
 (fewer opaque atoms, then fewer terms, then lower degree, then smaller
 coefficients by size, then term by term). Opaque atoms count first
 because a form over variables alone is the class's value and one
@@ -526,6 +597,17 @@ parameters, rather than egglog's user-written merge functions, which
 are unchecked. Experiment 6 (../design/ac-problem.md) measures it: all
 four measures reach every workload target, and `most-terms` costs
 thirteen to fifteen times the time.
+
+`:prefer` was an option of `simplify` until 2026-09-20 and is now an
+option of `bendix.analysis/poly-analysis` only, where the bench
+reaches it. Experiment 6 answered its question, nothing else used a
+measure, and the kept form is not only a performance matter for
+results: it is the form `materialize-all` renders, hence one of the
+candidates extraction chooses among, so every guarantee about results
+(section 6) would have to hold for every measure, and they are
+tested under the built-in order alone. Soundness and completeness do
+not depend on it, as above; what a user would have bought with the
+option was a different representative and an untested promise.
 
 The core joins what a class's nodes now say *into* what the class
 had, so a class keeps the preferred form it has ever derived; every
@@ -621,17 +703,42 @@ the input is defined.
 ## 6. Cost functions: where "simplest" lives
 
 A saturated e-graph contains the expanded form, the factored form, and
-everything between. Extraction chooses. So the cost function is a
-first-class, documented, user-supplied value, and the defaults are
-opinions:
+everything between. Extraction chooses, by a cost function: that is
+cromulent's mechanism (`(fn [node child-costs])`, anything `compare`
+orders), and extraction does not exist without one. bendix ships two
+costs and makes its promises about those two:
+
+- **For any cost function** a result is sound: it is a term of the
+  root's class, and every rule and every form in the class preserves
+  value.
+- **For the costs that ship, under the rule sets that ship**, the
+  result is canonical up to ties (equal spellings of a value reach
+  one cost), its cost is a fixpoint (`simplify` of a result costs
+  what the result did), and under `default-cost` a term never grows.
+  These are properties of rules and cost together, not of `simplify`
+  alone: they hold when the cheapest spelling under the cost is among
+  the forms the rules always propose, which can be arranged and
+  tested for a cost we know (`combine-powers` proposes two forms for
+  that reason, section 3) and cannot for one we do not. A tie goes to
+  cromulent's node order, which is the same on both runtimes and not
+  across input spellings, so canonical means the cost, not the term.
+
+`:cost` stays an option of `simplify`: `differentiate` is `simplify`
+under `no-D`, and a caller's own cost gets the first promise. A cost
+joins the second list by being tested against every rule set, the
+way `no-D` was. Until 2026-09-20 this section called the cost "a
+first-class, user-supplied value" and listed `prefer-factored`,
+`prefer-expanded`, operator cost tables and a combinator set; none
+was built, no caller asked, and the promise of canonicity for costs
+nobody had written shaped decisions it should not have (the
+`combine-powers` defect was first weighed against them). They come
+back when something needs them.
 
 - `default-cost`: fewest nodes, with a slight preference (1/64 of a
   node) for the operators normal forms are written in, so that of
   `x/2` and `(1/2)·x` the latter wins. The default. Ties that remain
   go to cromulent's deterministic node order, so a result is the same
   on both runtimes.
-- `prefer-factored` / `prefer-expanded`: weights on `:*`-over-`:+`
-  vs. `:+`-over-`:*` at the root.
 - `no-D`: the cost of a term as the vector `[undifferentiated, size]`,
   the sizes of the arguments of its `:D` nodes summed and then
   `default-cost`, compared lexicographically, so a derivative pushed
@@ -647,12 +754,13 @@ opinions:
   number as before, or a vector, and a vector cost is monotone when
   no component decreases from a child to its parent and the last
   strictly increases.
-- Operator cost tables (a `:sin` costs more than a `:*`), depth
-  penalties, and combinations, via a small combinator set.
 
-Whether a result is "simple" is the user's judgment; the library's job
-is to make that judgment a value they can pass in, and to make the
-default one unsurprising.
+The default should be unsurprising, and there is one place where
+fewest nodes may surprise: `a·y·yⁿ` is a node smaller than
+`a·y^(n+1)` and is what `default-cost` returns, where Mathematica,
+Maxima and SymPy print the combined power. Both spellings always
+exist now, so this is a question about the default cost alone (open,
+section 9).
 
 ## 7. Testing
 
@@ -680,6 +788,15 @@ default one unsurprising.
   above, which respect every identity the rules use, so a symbolic
   derivative is compared with a symbolic derivative and the model
   need not differentiate like sine (section 3, "Differentiation").
+- **Canonicity and the cost fixpoint** (section 6), for the costs
+  that ship against the rule sets that ship: over random terms,
+  `simplify` of a result costs what the result did; and where a rule
+  has more than one canonical form, equal spellings of a value, put
+  in a random context, reach one cost (`b^(s+k)` beside a cofactor
+  written four ways, for `combine-powers`). The fixpoint property is
+  the one that found the defects of 2026-09-16; canonicity is what
+  it was a symptom of, and is tested directly where spellings can be
+  generated.
 - **Textbook set.** A curated table of inputs and expected outputs per
   rule set, run alone and combined.
 - **Emmy as a second oracle**, later: simplify with both and compare
@@ -705,24 +822,15 @@ small, optional piece; Emmy's test corpus is a resource.
 - The `:too-big` threshold for the polynomial analysis, and whether the
   normal form is materialized into the e-graph as a node (so it can be
   extracted) always, never, or only at the root.
-- Which `:prefer` measures are worth shipping beyond the four, and
-  whether a measure should ever see the graph (today it cannot, so
-  the order is fixed for the analysis's whole run).
 - Whether `:D` belongs in the term language (differentiation as
   equality) or is a separate operation that calls into the engine.
   Decided (section 3, "Differentiation"): the former; the oracle
   for it is a reference differentiator whose result must land in the
   same class.
-- `combine-powers` against the size cost: inside an n-ary product
-  `y·yⁿ` costs one node less than `y^(1+n)`, the exponent's `:+`
-  being paid for and the extra factor free, and the rule only ever
-  combines fully, so the cheaper spelling exists as a node only when
-  the input or a rendered proposal happens to hold it, and `simplify`
-  of a result can be cheaper than the result (found by the suite on
-  Jolt, 2026-09-16; `textbook-powers` asserts one `:expt` node and
-  passes either way). A `split-powers` rule proposing `B^k·B^S` for a
-  constant offset `k`, so that both spellings exist and the cost
-  decides, or a cost that charges a symbolic exponent less: open.
+- Whether fewest nodes is the right default for powers: `a·y·yⁿ`
+  is what `default-cost` returns and `a·y^(n+1)` is what every other
+  CAS prints (section 6). Both spellings always exist (section 3),
+  so whichever way this goes it is a change to one cost function.
 
 ## Appendix: term format trade-offs
 
@@ -814,6 +922,14 @@ built normal-form rules, `pythagoras`, the term seam in the rules,
    `d-power` cover quotients and `d-quotient` becomes redundant, at
    the price of extending the section 5 exemption to division
    (`x/x` becomes 1) and of `differentiate` always running `powers`.
+   The larger candidate, from the `combine-powers` defect
+   (2026-09-20): fold the power law into the analysis, negative and
+   symbolic powers as Laurent monomials over atoms `B^S`, so that
+   `combine-powers` and its two forms disappear, the index does the
+   merging and the spelling of a power is `->term`'s decision. It
+   needs negative degrees in `bendix.poly` and an atom for an
+   exponent part that has no class. The compound-base limit of
+   section 3 (`(x + 1)·(x + 1)ⁿ`) belongs here too.
 
 ## Status
 
@@ -1028,10 +1144,39 @@ from it (section 4, merge), so `eˣ` was spelled as
 `exp(eˣ)⁻¹·D(exp(eˣ))` for the rest of the run; `defines?` now
 refuses a form with an atom reachable from the defined atom through
 the children of opaque nodes, and the derivative term that found it
-is a test (the suite is 67 tests, 347 assertions). The other is
-`combine-powers` against the size cost (section 9), left open. The
+is a test (the suite is 67 tests, 347 assertions). The other was
+`combine-powers` against the size cost, closed below. The
 seed of the powers failure reproduces on the JVM at trial 45
 (`1789597929120`); the derivative's does not carry across runtimes,
 the shrunk term does.
+
+Two forms of a power, and a narrower contract (2026-09-20, green on
+both runtimes, Jolt v0.8.10). Tracing the powers failure showed a
+canonicity defect, not only a fixpoint one: three spellings of
+`a·y^(n+1)` gave costs 6, 7 and 7, because the rule proposed the
+combined power alone and the cheaper `a·y·yⁿ` existed only when the
+input or another rule's rendering held it (section 3,
+`combine-powers`). `bendix.rules/power-forms` now returns two
+canonical forms, `combined-form` as before and `split-form`, the
+positive integer part of a group's exponent returned to the ring
+(`exponent-poly` reads a symbolic exponent through its class's
+canonical form; the base must be one atom; the group's own `B^S`
+atom is reused when it has one, so a monomial already split
+proposes nothing); `exp-forms` shares `rewrite-monomials` with them.
+All three spellings reach 6, an offset of 2 or −1 reaches 7 either
+way, the seed's term is a fixpoint at once, and the limit for a
+compound base is recorded in section 3. The contract narrowed with
+it: section 6 promises soundness for any cost, and canonicity, the
+cost fixpoint and never-grows for the costs that ship against the
+rule sets that ship; the unbuilt cost combinators are struck;
+`:prefer` is an option of the analysis and no longer of `simplify`
+(section 4). Tests (the suite is 69 tests, 356 assertions): the
+spellings by example with the seed's term, and canonicity as a
+property, `b^(s+k)` beside a cofactor written four ways in a random
+context reaching one cost; `the-preference-is-a-measure` no longer
+goes through `simplify`. A soak of two thousand fixpoint trials and
+a thousand canonicity trials passed. `bench/`: experiment 7
+(../design/ac-problem.md), and experiment 6 now builds its own
+e-graph to reach `:prefer`.
 
 Not yet: everything in section 10, other syntaxes, explanations.

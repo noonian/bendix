@@ -1,5 +1,5 @@
 (ns bendix.bench
-  "Experiments 2, 4, 5 and 6 of ../design/ac-problem.md, simplifier
+  "Experiments 2, 4, 5, 6 and 7 of ../design/ac-problem.md, simplifier
   timings and derivative timings, run the same way on both runtimes:
 
      clojure -M:bench        jolt -M:bench"
@@ -65,12 +65,14 @@
 
 (defn- simplified
   "Saturate t under rules, materialize, extract: `simplify` with the
-  e-graph and the iteration count kept."
+  e-graph and the iteration count kept. opts go to the analysis, so
+  experiment 6 can set :prefer, which `simplify` does not take."
   [t rules opts]
-  (let [{:keys [egraph root stop-reason iterations]} (bx/saturate t (assoc opts :rules rules))
+  (let [[g0 root] (eg/add (bx/egraph opts) t)
+        {:keys [egraph stop-reason iterations]} (rw/embiggen g0 rules {})
         g (bx/materialize-all egraph)
-        {:keys [term]} (ex/extract g root bx/default-cost)]
-    {:result term :egraph g :stop stop-reason :iterations iterations}))
+        {:keys [term cost]} (ex/extract g root bx/default-cost)]
+    {:result term :cost cost :egraph g :stop stop-reason :iterations iterations}))
 
 (defn buried-trig
   "sin²x + cos²x buried at random positions in a sum of n atoms, under
@@ -186,6 +188,55 @@
                   (if (seq missed) (str "; " (pr-str (map :fixture missed))) "")))}))
 
 ;; ---------------------------------------------------------------------------
+;; experiment 7: one canonical form of a power, or two
+
+(def combine-only
+  "combine-powers as it was before experiment 7: the one-power-per-base
+  form alone."
+  (rules/normal-form-rule "combine-only" (fn [g _ p] (some-> (rules/combined-form g p) vector))))
+
+(defn- offset-sum
+  "Σ aᵢ · y^(n+1) for i < k, nested: k monomials that each have a
+  second form. Spelled combined, or split as aᵢ · y · y^n."
+  [k split?]
+  (nested-sum (map (fn [i]
+                     (let [a (keyword (str "a" i))]
+                       (if split? [:* a :y [:expt :y :n]] [:* a [:expt :y [:+ :n 1]]])))
+                   (range k))))
+
+(def power-workload
+  "[label term]: spellings of one value side by side, the workload's
+  powers rows, the term the suite's seed 1789597929120 shrinks to, and
+  sums where every monomial has a second form."
+  [["a y y^n" [:* :a :y [:expt :y :n]]]
+   ["a y^(n+1)" [:* :a [:expt :y [:+ :n 1]]]]
+   ["(a y) y^n" [:* [:* :a :y] [:expt :y :n]]]
+   ["a y^2 y^n" [:* :a [:expt :y 2] [:expt :y :n]]]
+   ["a y^(n+2)" [:* :a [:expt :y [:+ :n 2]]]]
+   ["x^n x^m" [:* [:expt :x :n] [:expt :x :m]]]
+   ["(x^n)^2 sin2 + (x^n)^2 cos2" [:+ [:* [:expt [:expt :x :n] 2] s2] [:* [:expt [:expt :x :n] 2] c2]]]
+   ["sin2 x^(n+m) + cos2 x^n x^m" [:+ [:* s2 [:expt :x [:+ :n :m]]] [:* c2 [:* [:expt :x :n] [:expt :x :m]]]]]
+   ["the seed's term" [:+ [:* :x :x [:* [:* :x [:* [:* :x :y :x] [:expt :y :n]] [:+ [:* :x :x] [:expt :y -1]]]
+                                     [:+ :x [:* [:+ [:sin :x] :x] [:* [:sin :x] :y]]]]] :x]]
+   ["sum of 10 a_i y^(n+1)" (offset-sum 10 false)]
+   ["sum of 10 a_i y y^n" (offset-sum 10 true)]
+   ["sum of 100 a_i y^(n+1)" (offset-sum 100 false)]
+   ["sum of 100 a_i y y^n" (offset-sum 100 true)]])
+
+(defn power-forms-rows
+  "One row per rule set for a workload entry: the cost reached, and
+  whether simplifying the result again reaches the same cost."
+  [[label t]]
+  (for [[forms power-rules] [["one form " [combine-only]] ["two forms" rules/powers]]]
+    (let [rules (-> [] (into rules/trig) (into power-rules) (into rules/exp-log))
+          [ms r] (timed #(simplified t rules {}))
+          again (simplified (:result r) rules {})
+          g (:egraph r)]
+      {:fixture (str forms " " label) :n (:iterations r) :ms ms
+       :nodes (eg/node-count g) :classes (eg/class-count g)
+       :note (str "cost " (:cost r) (if (= (:cost r) (:cost again)) "" (str ", again " (:cost again))))})))
+
+;; ---------------------------------------------------------------------------
 ;; derivatives: a wide sum and a deep nesting
 
 (defn derivative-row
@@ -216,7 +267,7 @@
                   (fn [t] (and (= :* (nth t 0)) (= n (dec (count t))) (not (mentions? :D t))))))
 
 (defn- row [{:keys [fixture n ms nodes classes note]}]
-  (println (format "%-28s n=%-5d %8.1f ms   nodes=%-6d classes=%-6d %s" fixture n (double ms) nodes classes (or note ""))))
+  (println (format "%-38s n=%-5d %8.1f ms   nodes=%-6d classes=%-6d %s" fixture n (double ms) nodes classes (or note ""))))
 
 (defn -main [& _]
   (println "bendix bench")
@@ -239,6 +290,8 @@
   (row (preference-row "lowest-degree" an/lowest-degree))
   (row (preference-row "fewest-atoms" an/fewest-atoms))
   (row (preference-row "most-terms" (an/most-terms 200)))
+  (println "experiment 7")
+  (doseq [w power-workload, r (power-forms-rows w)] (row r))
   (println "derivatives")
   (doseq [n [10 100]] (row (wide-sum n)))
   (doseq [n [5 20]] (row (deep-nesting n)))

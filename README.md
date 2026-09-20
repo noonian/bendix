@@ -68,11 +68,12 @@ a class's polynomial, so it finds the pair however the sum or product
 is arranged; `bendix.rules/powers` combines the powers of one base
 inside any product the same way, and `bendix.rules/exp-log` the
 exponentials; `bendix.rules/normal-form-rule` builds more of them.
-`:cost` is a cromulent cost function; the default is AST size, and
-what "simplest" means is yours to decide. `:prefer` decides which of
-two forms a class keeps inside the analysis, as a measure into
-natural numbers so that termination is never in question
-(`bendix.analysis/fewest-terms` is the default). `differentiate` is
+`:cost` is a cromulent cost function; the default is AST size with a
+slight preference for the operators normal forms are written in. Two
+costs ship, `default-cost` and `no-D`, and under them equal spellings
+of a value reach one cost and the cost of a result is a fixpoint;
+any other cost function gets a sound result and no promise beyond
+that (IDEA.md section 6). `differentiate` is
 `simplify` of `[:D t x]` under `bendix.rules/derivative`, where the
 ring part of a derivative is computed from the class's normal form
 and the chain rule is one pattern rule per operator, extracted under
@@ -82,7 +83,7 @@ and the chain rule is one pattern rule per operator, extracted under
 
 ```
 clojure -M:test     jolt -M:test     jolt test      # the suite, either runtime
-clojure -M:bench    jolt -M:bench                   # experiments 2, 4, 5, 6 and simplifier timings
+clojure -M:bench    jolt -M:bench                   # experiments 2, 4, 5, 6, 7 and simplifier timings
 ```
 
 [IDEA.md](IDEA.md) is the design and status.

@@ -240,7 +240,8 @@
     (is (= {:atom (eg/find g s)} (data g s)) "sin of a too-big class is an atom, not too-big")
     (is (= {} (data g d)) "so sin(big) − sin(big) = 0")))
 
-(deftest the-preference-is-pluggable
+(deftest the-preference-is-a-measure
+  ;; the analysis's knob for experiment 6, not an option of simplify.
   ;; x = y + 1 asserted: the default keeps x, most-terms keeps y + 1,
   ;; and every parent follows the choice
   (let [assert-it (fn [opts]
@@ -257,8 +258,6 @@
     (is (= [{{:y 1} 1, {} 1} {{:y 2} 1, {:y 1} 2, {} 1}] (assert-it {:prefer (an/most-terms 200)})))
     (is (= [{{:x 1} 1} {{:x 2} 1}] (assert-it {:prefer an/lowest-degree}))
         "equal degree: the built-in order breaks the tie"))
-  (is (= [:* 5 :x] (:result (bx/simplify [:+ [:* 2 :x] [:* 3 :x]] {:prefer an/fewest-atoms})))
-      "simplify takes :prefer")
   (is (thrown? clojure.lang.ExceptionInfo
                (let [g (bx/egraph {:prefer (fn [p] (- (p/term-count p)))})
                      [g x] (eg/add g :x)

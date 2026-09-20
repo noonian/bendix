@@ -390,7 +390,9 @@
   count past which a normal form is abandoned (default 200); :prefer,
   a measure (fn [p] [n ...]) into vectors of natural numbers deciding
   which of two forms a class keeps (default: the built-in order,
-  fewest terms first)."
+  fewest terms first). :prefer is an experiment's knob (experiment 6)
+  and not an option of `simplify`: what the simplifier guarantees
+  about results, it guarantees under the built-in order."
   ([] (poly-analysis {}))
   ([{:keys [too-big prefer] :or {too-big 200}}]
    {:name :poly

@@ -7,8 +7,13 @@
 
   Options: :rules (default none), :cost (default `default-cost`),
   :dev? (check the normal forms after every rule application and
-  throw naming the rule), :too-big and :prefer for the analysis
+  throw naming the rule), :too-big for the analysis
   (bendix.analysis/poly-analysis), and the runner's limits.
+
+  The costs that ship are `default-cost` and `no-D`. Under them and
+  the rule sets that ship, equal spellings of a value reach one cost
+  and the cost of a result is a fixpoint; any other cost function is
+  sound and promises nothing more (IDEA.md section 6).
 
     (differentiate [:sin [:* 2 :x]] :x)
     ;; => {:result [:* 2 [:cos [:* 2 :x]]] :cost [0 385/64] ... :undifferentiated #{}}
@@ -96,7 +101,7 @@
   root come back with the runner's result."
   ([t] (saturate t {}))
   ([t {:keys [rules dev?] :or {rules []} :as opts}]
-   (let [g (egraph (select-keys opts [:too-big :prefer]))
+   (let [g (egraph (select-keys opts [:too-big]))
          [g root] (eg/add g t)
          res (rw/embiggen g rules (cond-> (select-keys opts runner-keys)
                                     dev? (assoc :check an/inconsistency)))]

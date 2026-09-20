@@ -117,6 +117,7 @@
 
 (def xn [:expt :x :n])
 (def xm [:expt :x :m])
+(def yn [:expt :y :n])
 
 (defn- simp-powers [t] (:result (simplify t {:rules rules/powers})))
 
@@ -148,6 +149,32 @@
   (is (= [:* [:expt :x :n] [:expt :y :n]] (simp-powers [:* xn [:expt :y :n]])) "different bases stay")
   (is (= xn (simp-powers xn)) "one power stays")
   (is (= [:expt :x 3] (simp-powers [:* :x [:expt :x 2]])) "the ring alone: no rule needed"))
+
+(defn- cost-powers [t] (:cost (simplify t {:rules both :too-big 50})))
+
+(deftest power-spellings-reach-one-cost
+  ;; whichever spelling the cost prefers exists, whatever the input
+  ;; wrote: the split one by a node for an offset of 1 beside another
+  ;; factor, the combined one otherwise
+  (is (= [6 6 6] (map cost-powers [[:* :a :y yn]
+                                   [:* :a [:expt :y [:+ :n 1]]]
+                                   [:* [:* :a :y] yn]]))
+      "y · yⁿ is a node cheaper than y^(n+1) inside a product")
+  (is (= [:* :a :y yn] (simp-powers [:* :a [:expt :y [:+ :n 1]]])) "and is proposed for it")
+  (is (= [7 7] (map cost-powers [[:* :a [:expt :y 2] yn] [:* :a [:expt :y [:+ :n 2]]]]))
+      "an offset of 2 is cheaper combined")
+  (is (= [7 7] (map cost-powers [[:* :a [:expt :y -1] yn] [:* :a [:expt :y [:+ :n -1]]]]))
+      "a negative offset is not split")
+  (is (= [8 8] (map cost-powers [[:* :a :y yn [:expt :y :m]] [:* :a [:expt :y [:+ 1 :n :m]]]])))
+  (is (= [8 8] (map cost-powers [[:* :a :y [:expt :y [:* 2 :n]]] [:* :a [:expt :y [:+ 1 [:* 2 :n]]]]])))
+  (is (apply = (map cost-powers [[:* :a [:sin :x] [:expt [:sin :x] :n]] [:* :a [:expt [:sin :x] [:+ :n 1]]]]))
+      "an opaque base")
+  (is (= 0 (simp-powers [:- [:* :y :y yn] [:expt :y [:+ :n 2]]])) "the two forms are one class")
+  (let [t [:+ [:* :x :x [:* [:* :x [:* [:* :x :y :x] yn] [:+ [:* :x :x] [:expt :y -1]]]
+                         [:+ :x [:* [:+ [:sin :x] :x] [:* [:sin :x] :y]]]]] :x]
+        {:keys [result cost]} (simplify t {:rules both :too-big 50})]
+    (is (= cost (cost-powers result))
+        "the term seed 1789597929120 shrank to: pythagoras rendered x⁵·y·yⁿ on the second pass only")))
 
 (deftest powers-saturate-quickly
   (let [{:keys [iterations stop-reason egraph]} (bx/saturate [:+ [:* xn xm] [:* [:expt :x -2] [:expt :x 3]]] {:rules rules/powers})]
@@ -197,6 +224,30 @@
              (prop/for-all [t pow-term-gen]
                (let [{:keys [egraph]} (bx/saturate t {:rules both :too-big 50})]
                  (empty? (check/violations (bx/materialize-all egraph))))))]
+    (is (:pass? res) (pr-str res))))
+
+(def power-base-gen (gen/elements [:x :y [:sin :x]]))
+(def power-symbol-gen (gen/elements [:n :m [:+ :n :m] [:* 2 :n] [:* -1 :m]]))
+(def cofactor-gen (gen/elements [nil :a 2 [:sin :x] [:expt :x :m]]))
+
+(defn- power-spellings
+  "b^(s+k) beside the cofactor, written four ways."
+  [b k s cofactor]
+  (let [bk (if (= 1 k) b [:expt b k])
+        product (fn [fs]
+                  (let [fs (if cofactor (cons cofactor fs) fs)]
+                    (if (= 1 (count fs)) (first fs) (into [:*] fs))))]
+    [(product [[:expt b [:+ s k]]])
+     (product [bk [:expt b s]])
+     (product [[:expt b s] bk])
+     (if cofactor [:* [:* cofactor bk] [:expt b s]] [:* bk [:expt b s]])]))
+
+(deftest power-spellings-reach-one-cost-in-any-context
+  (let [res (tc/quick-check
+             100
+             (prop/for-all [b power-base-gen, k (gen/choose 1 3), s power-symbol-gen
+                            cofactor cofactor-gen, context pow-term-gen]
+               (apply = (map #(cost-powers [:+ context %]) (power-spellings b k s cofactor)))))]
     (is (:pass? res) (pr-str res))))
 
 ;; ---------------------------------------------------------------------------

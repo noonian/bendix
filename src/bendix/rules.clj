@@ -208,21 +208,102 @@
               m
               (sort-by key combinable)))))
 
-(defn power-forms
-  "p with every monomial's same-base powers combined, when that
-  changes anything: the polynomial rewrite behind `combine-powers`."
-  [g _ p]
-  (let [p' (reduce-kv (fn [acc m c] (poly/add acc {(or (combine-monomial g m) m) c}))
+(defn- class-poly
+  "The canonical form of the class id as a polynomial, an opaque class
+  as its own atom; nil when the class has given up."
+  [g id]
+  (let [d (an/canonical g (eg/data g id :poly))]
+    (cond (an/polynomial? d) d
+          (an/atom? d) (poly/variable (:atom d)))))
+
+(defn- unit-atom
+  "The atom a when p is a alone, to the first power with coefficient
+  1, else nil."
+  [p]
+  (when (= 1 (count p))
+    (let [[m c] (first p)]
+      (when (and (= 1 c) (= 1 (count m)) (= 1 (val (first m))))
+        (key (first m))))))
+
+(defn- exponent-poly
+  "The exponent of the group of factors fs of one base as a
+  polynomial, a symbolic exponent read through its class's canonical
+  form so that the 1 of n + 1 is a constant here."
+  [g fs]
+  (reduce (fn [acc {:keys [k sym e]}]
+            (poly/add acc (poly/scale (cond-> (poly/constant k)
+                                        sym (poly/add (or (class-poly g sym) (poly/variable sym))))
+                                      e)))
+          poly/zero
+          fs))
+
+(defn- split-monomial
+  "m with every base's power written as B^k · B^S, k the positive
+  integer constant of the exponent, which goes back to the ring, and S
+  the rest, one placeholder power; nil when no base has both parts or
+  m is already so written. The base must be one atom, so a monomial
+  stays a monomial."
+  [g m]
+  (let [factors (map (fn [[a e]] (assoc (factor g a) :atom a :e e)) m)
+        m' (reduce (fn [m [b fs]]
+                     (let [p (exponent-poly g fs)
+                           k (get p {} 0)
+                           rest-p (dissoc p {})
+                           base (some-> (class-poly g b) unit-atom)]
+                       (if-not (and base (integer? k) (pos? k) (seq rest-p))
+                         m
+                         (let [kept (some (fn [f] (when (and (:sym f) (= 1 (:e f)) (zero? (:k f))
+                                                             (= rest-p (class-poly g (:sym f))))
+                                                    (:atom f)))
+                                          fs)
+                               render-atom (fn [a] (if (bt/class-id? a) (bt/class-ref a) a))
+                               power (or kept
+                                         (bt/placeholder :expt [(bt/class-ref b) (poly/->term rest-p render-atom)]))]
+                           (-> (reduce dissoc m (map :atom fs))
+                               (assoc base k)
+                               (assoc power 1))))))
+                   m
+                   (sort-by key (group-by :base factors)))]
+    (when (not= m' m) m')))
+
+(defn- rewrite-monomials
+  "p with every monomial m replaced by (f m) where that is not nil, or
+  nil when nothing changes."
+  [p f]
+  (let [p' (reduce-kv (fn [acc m c] (poly/add acc {(or (f m) m) c}))
                       poly/zero
                       p)]
-    (when (not= p' p) [p'])))
+    (when (not= p' p) p')))
+
+(defn combined-form
+  "p with every monomial's same-base powers combined into one power
+  per base, or nil when that changes nothing."
+  [g p]
+  (rewrite-monomials p #(combine-monomial g %)))
+
+(defn split-form
+  "p with every power's positive integer offset returned to the ring,
+  x^(n+1) as x · x^n, or nil when that changes nothing."
+  [g p]
+  (rewrite-monomials p #(split-monomial g %)))
+
+(defn power-forms
+  "The two canonical forms of p modulo the power law, where they
+  differ from p: the polynomial rewrite behind `combine-powers`."
+  [g _ p]
+  (keep identity [(combined-form g p) (split-form g p)]))
 
 (def combine-powers
   "x^a · x^b = x^(a+b), and (x^a)^n = x^(n·a) for an integer n, inside
   every monomial, for the powers the analysis holds as atoms: a
-  negative or non-integer constant exponent, or a symbolic one. Sound
-  on the principal branch wherever the left-hand side is defined; at
-  x = 0 it follows the convention 0⁰ = 1 (IDEA.md section 10)."
+  negative or non-integer constant exponent, or a symbolic one. Two
+  canonical forms are proposed, as `pythagoras` proposes two: one
+  power per base, and that power with the positive integer part of
+  its exponent returned to the ring (x^(n+1) as x · x^n), so that
+  whichever spelling the cost prefers exists whatever the input wrote
+  (IDEA.md section 3). Sound on the principal branch wherever the
+  left-hand side is defined; at x = 0 it follows the convention
+  0⁰ = 1 (IDEA.md section 5)."
   (normal-form-rule "combine-powers" power-forms))
 
 (def powers
@@ -276,10 +357,8 @@
   "p with every monomial's exponential factors collected, when that
   changes anything: the polynomial rewrite behind `combine-exp`."
   [g _ p]
-  (let [p' (reduce-kv (fn [acc m c] (poly/add acc {(or (collect-monomial g m) m) c}))
-                      poly/zero
-                      p)]
-    (when (not= p' p) [p'])))
+  (when-let [p' (rewrite-monomials p #(collect-monomial g %))]
+    [p']))
 
 (def combine-exp
   "exp(a)·exp(b) = exp(a + b) and exp(a)^n = exp(n·a), inside every
