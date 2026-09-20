@@ -471,9 +471,18 @@ normal form is a later analysis).
 themselves. Two different ones mean this e-graph asserts they are
 equal. In order: `:conflict` absorbs; a given-up class absorbs; an
 atom `{:atom id}` is below `:too-big` and below any form that
-*defines* it, one that does not mention it, while a form that
-mentions it (`sin y = a·sin y`) is an equation the class records with
-the atom staying its representative; `:too-big` (a term count over
+*defines* it, one that neither mentions it nor holds an atom *built
+from* it, while a form that mentions it (`sin y = a·sin y`) is an
+equation the class records with the atom staying its representative,
+and so is one with an atom built from it: reachable from that atom
+through the children of opaque nodes, ring nodes being equations and
+not structure. `exp(eˣ)⁻¹·D(exp(eˣ))` for `eˣ`, which `d-log`
+proposes once `log(exp(eˣ))` has merged into `eˣ`'s class, would
+spell the primitive over its own derivative; when the derivative was
+then proved worth `exp(eˣ)·eˣ` that honest definition was refused as
+cyclic, the bloated one stood, and `5eˣ` could never be rendered as
+`[:* 5 [:exp :x]]`, so `simplify` was not a fixpoint (found by the
+suite on Jolt, 2026-09-16); `:too-big` (a term count over
 the threshold) absorbs polynomials; a difference that is a non-zero
 constant (`x = x + 1`) is a contradiction in the ring itself and
 becomes `:conflict`; otherwise the join is the *preferred* polynomial.
@@ -704,6 +713,16 @@ small, optional piece; Emmy's test corpus is a resource.
   Decided (section 3, "Differentiation"): the former; the oracle
   for it is a reference differentiator whose result must land in the
   same class.
+- `combine-powers` against the size cost: inside an n-ary product
+  `y·yⁿ` costs one node less than `y^(1+n)`, the exponent's `:+`
+  being paid for and the extra factor free, and the rule only ever
+  combines fully, so the cheaper spelling exists as a node only when
+  the input or a rendered proposal happens to hold it, and `simplify`
+  of a result can be cheaper than the result (found by the suite on
+  Jolt, 2026-09-16; `textbook-powers` asserts one `:expt` node and
+  passes either way). A `split-powers` rule proposing `B^k·B^S` for a
+  constant offset `k`, so that both spellings exist and the cost
+  decides, or a cost that charges a symbolic exponent less: open.
 
 ## Appendix: term format trade-offs
 
@@ -1001,5 +1020,18 @@ one of a hundred in 4 iterations at 1000 nodes; five nested sines in
 7 iterations, twenty in 22, the depth plus two, all under 60 ms on
 the JVM. cromulent: 49 tests, 172 assertions, one new for vector
 costs.
+
+The join's definitions (2026-09-16, green on both runtimes, Jolt
+v0.8.8): the suite on Jolt found `simplify` not a fixpoint twice.
+One was the analysis: an atom yielded to a form whose atom was built
+from it (section 4, merge), so `eˣ` was spelled as
+`exp(eˣ)⁻¹·D(exp(eˣ))` for the rest of the run; `defines?` now
+refuses a form with an atom reachable from the defined atom through
+the children of opaque nodes, and the derivative term that found it
+is a test (the suite is 67 tests, 347 assertions). The other is
+`combine-powers` against the size cost (section 9), left open. The
+seed of the powers failure reproduces on the JVM at trial 45
+(`1789597929120`); the derivative's does not carry across runtimes,
+the shrunk term does.
 
 Not yet: everything in section 10, other syntaxes, explanations.

@@ -95,6 +95,21 @@
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"variable" (differentiate :x 2)))
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"variable" (differentiate :x [:sin :x]))))
 
+(deftest a-primitive-is-not-defined-by-its-own-derivative
+  ;; log-of-exp merges log(exp(eˣ)) into eˣ's class, d-log fires there
+  ;; and proposes exp(eˣ)⁻¹·D(exp(eˣ)); the join must not take that as
+  ;; the definition of eˣ, or 4eˣ + eˣ is never collected and the cost
+  ;; is not a fixpoint (found by the suite on Jolt, 2026-09-16)
+  (let [t [:* [:+ [:+ :x [:+ :x :x]] [:+ 1 [:log [:exp :x]]]] [:+ :x [:log [:exp [:exp :x]]]]]
+        rules (into rules/derivative rules/exp-log)
+        {:keys [result cost]} (differentiate t :x {:rules rules/exp-log :too-big 50})
+        again (simplify result {:rules rules :cost bx/no-D :too-big 50})
+        {:keys [egraph]} (bx/saturate [:D t :x] {:rules rules :too-big 50})
+        e (eg/lookup egraph [:exp (eg/lookup egraph :x)])]
+    (is (= [:+ [:* 4 :x [:exp :x]] [:* 8 :x] [:* 5 [:exp :x]] 1] result))
+    (is (= cost (:cost again)) "the cost is a fixpoint")
+    (is (an/atom? (eg/data egraph e :poly)) "eˣ stays an atom")))
+
 (defn- depth [t] (if (vector? t) (inc (reduce max 0 (map depth (rest t)))) 0))
 
 (deftest saturation-takes-at-most-depth-plus-two-iterations

@@ -309,13 +309,48 @@
       (throw (ex-info ":prefer must return a vector of natural numbers" {:key k :polynomial p})))
     k))
 
+(defn- built-from?
+  "Is the class of a reachable from the class of c through the
+  children of opaque nodes: is c, as structure the ring cannot see
+  through, built from a? D(exp(eˣ)) is built from eˣ; exp(x) is not
+  built from exp(x + y). Ring nodes are equations a class records,
+  not structure, and are not followed: that eˣ's class holds the
+  product exp(eˣ)⁻¹·D(exp(eˣ)) does not make eˣ built from its own
+  derivative."
+  [g c a too-big]
+  (let [a (eg/find g a)]
+    (loop [stack [(eg/find g c)], seen #{}]
+      (if (empty? stack)
+        false
+        (let [r (peek stack), stack (pop stack)]
+          (cond
+            (= r a) true
+            (contains? seen r) (recur stack seen)
+            :else (recur (into stack
+                               (for [n (eg/nodes g r)
+                                     :when (and (term/compound? n) (= ::opaque (ring-op g n too-big)))
+                                     ch (term/children n)]
+                                 (eg/find g ch)))
+                         (conj seen r))))))))
+
 (defn- defines?
   "Does the polynomial d define the atom id? A form that does not
   mention the atom does (exp(x)·exp(y) for exp(x + y), 1 − x for
   log(exp(1 − x))); a form that mentions it (a·sin y for sin y) is an
-  equation the class records, and the atom stays its representative."
-  [d id]
-  (and (polynomial? d) (not (contains? (poly/atoms d) id))))
+  equation the class records, and the atom stays its representative.
+  So is a form with an atom that is built from the atom: once
+  log(exp(eˣ)) has merged into eˣ's class, d-log fires there and
+  proposes exp(eˣ)⁻¹·D(exp(eˣ)) for eˣ, a fresh derivative class that
+  mentions nothing yet. Taken as the definition it spells the
+  primitive over its own derivative; when that derivative is then
+  proved worth exp(eˣ)·eˣ, the honest definition is refused as
+  cyclic, the bloated one stands, and 5eˣ can never be rendered as
+  [:* 5 [:exp :x]] (found by the suite on Jolt, 2026-09-16)."
+  [g d id too-big]
+  (and (polynomial? d)
+       (not (contains? (poly/atoms d) id))
+       (not-any? #(built-from? g % id too-big)
+                 (filter bt/class-id? (poly/atoms d)))))
 
 (defn- opaque-count
   "How many atoms of p are opaque classes rather than variables."
@@ -369,8 +404,9 @@
                                       (if (= ::opaque r) {:atom id} r))
               :else {:atom id}))
     ;; an atom {:atom id} is below :too-big and below any form that
-    ;; defines it; a form that mentions the atom is an equation, and
-    ;; the atom stays. The unit polynomial of another class (sin x · 1
+    ;; defines it; a form that mentions the atom, or holds an atom
+    ;; built from it, is an equation, and the atom stays. The unit
+    ;; polynomial of another class (sin x · 1
     ;; computes {{S 1} 1}) is an ordinary form: it says the class is
     ;; worth that class, which `solve` and the index act on, and it
     ;; is not an atom that yields to a definition (the derivative's
@@ -384,8 +420,8 @@
                  (and (atom? a) (atom? b)) (if (= (:atom a) (:atom b))
                                              a
                                              (preferred prefer (poly/variable (:atom a)) (poly/variable (:atom b))))
-                 (atom? a) (if (or (not (polynomial? b)) (defines? b (:atom a))) b a)
-                 (atom? b) (if (or (not (polynomial? a)) (defines? a (:atom b))) a b)
+                 (atom? a) (if (or (not (polynomial? b)) (defines? g b (:atom a) too-big)) b a)
+                 (atom? b) (if (or (not (polynomial? a)) (defines? g a (:atom b) too-big)) a b)
                  (or (= :too-big a) (= :too-big b)) :too-big
                  :else (let [d (poly/sub a b)]
                          (if (poly/constant? d)
