@@ -5,7 +5,8 @@
             [clojure.test.check.properties :as prop]
             [bendix.core :as bx :refer [simplify]]
             [bendix.poly-test :refer [eval-term]]
-            [cromulent.check :as check]))
+            [cromulent.check :as check]
+            [cromulent.extract :as ex]))
 
 (deftest textbook
   (is (= [:* 5 :x] (:result (simplify [:+ [:* 2 :x] [:* 3 :x]]))))
@@ -17,6 +18,8 @@
   (is (= [:* 2 [:sin :x]] (:result (simplify [:+ [:sin :x] [:sin :x]]))))
   (is (= [:* 1/2 :x] (:result (simplify [:/ :x 2]))))
   (is (= [:/ :x :y] (:result (simplify [:/ :x :y]))) "division by a non-constant is opaque")
+  (is (= [:expt :y 2] (:result (simplify [:* :y :y]))) "a product that repeats a base pays for it")
+  (is (= [:* [:expt :y 2] :z] (:result (simplify [:* :y :y :z]))) "even where the power is a node larger")
   (let [r (simplify [:+ [:* 2 :x] [:* 3 :x]])]
     (is (= 3 (:cost r)))
     (is (= :saturated (:stop r)))
@@ -52,15 +55,42 @@
                       (= (eval-term t env) (eval-term result env))))))]
     (is (:pass? res) (pr-str res))))
 
-(defn- size [t] (if (vector? t) (reduce + 1 (map size (rest t))) 1))
+(defn size [t] (if (vector? t) (reduce + 1 (map size (rest t))) 1))
+
+(defn simplify-counting-repeats
+  "`simplify` under the default cost, with :repeats: how many repeated
+  bases t pays for as it is written (`bx/default-cost` less `bx/size`,
+  in charges), in the saturated e-graph."
+  [t opts]
+  (let [{:keys [egraph root stop-reason]} (bx/saturate t opts)
+        g (bx/materialize-all egraph)
+        cost-fn (bx/default-cost g)
+        {:keys [term cost]} (ex/extract g root cost-fn)]
+    {:result term :cost cost :stop stop-reason
+     :repeats (/ (- (bx/term-cost g cost-fn t) (bx/term-cost g bx/size t)) bx/repeated-base-charge)}))
+
+(defn never-grows?
+  "A result is no larger than what was written, but for one node for
+  each repeated base it combined (IDEA.md section 6)."
+  [t {:keys [result repeats]}]
+  (<= (size result) (+ (size t) repeats)))
+
+(deftest term-cost-is-the-cost-of-what-was-written
+  (let [t [:* :a :y [:expt :y :n]]
+        nested [:* [:* :a :y] [:expt :y :n]]
+        g (bx/materialize-all (:egraph (bx/saturate [:+ t nested] {})))]
+    (is (= 6 (bx/term-cost g bx/size t)))
+    (is (= 8 (bx/term-cost g (bx/default-cost g) t)) "y and yⁿ share a base")
+    (is (= 9 (bx/term-cost g (bx/default-cost g) nested)) "the charge sees through nesting")
+    (is (= [0 8] (bx/term-cost g (bx/no-D g) t)))))
 
 (deftest simplify-never-grows-and-its-cost-is-a-fixpoint
   (let [res (tc/quick-check
              200
              (prop/for-all [t term-gen]
-               (let [{:keys [result cost]} (simplify t {:too-big 50})
+               (let [{:keys [result cost] :as r} (simplify-counting-repeats t {:too-big 50})
                      again (simplify result {:too-big 50})]
-                 (and (<= (size result) (size t))
+                 (and (never-grows? t r)
                       (= cost (:cost again))))))]
     (is (:pass? res) (pr-str res))))
 

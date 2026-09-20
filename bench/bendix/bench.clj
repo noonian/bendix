@@ -1,5 +1,5 @@
 (ns bendix.bench
-  "Experiments 2, 4, 5, 6 and 7 of ../design/ac-problem.md, simplifier
+  "Experiments 2, 4, 5, 6 and 8 of ../design/ac-problem.md, simplifier
   timings and derivative timings, run the same way on both runtimes:
 
      clojure -M:bench        jolt -M:bench"
@@ -67,12 +67,13 @@
   "Saturate t under rules, materialize, extract: `simplify` with the
   e-graph and the iteration count kept. opts go to the analysis, so
   experiment 6 can set :prefer, which `simplify` does not take."
-  [t rules opts]
-  (let [[g0 root] (eg/add (bx/egraph opts) t)
-        {:keys [egraph stop-reason iterations]} (rw/embiggen g0 rules {})
-        g (bx/materialize-all egraph)
-        {:keys [term cost]} (ex/extract g root bx/default-cost)]
-    {:result term :cost cost :egraph g :stop stop-reason :iterations iterations}))
+  ([t rules opts] (simplified t rules opts bx/default-cost))
+  ([t rules opts cost]
+   (let [[g0 root] (eg/add (bx/egraph opts) t)
+         {:keys [egraph stop-reason iterations]} (rw/embiggen g0 rules {})
+         g (bx/materialize-all egraph)
+         {:keys [term cost]} (ex/extract g root (cost g))]
+     {:result term :cost cost :egraph g :root root :stop stop-reason :iterations iterations})))
 
 (defn buried-trig
   "sin²x + cos²x buried at random positions in a sum of n atoms, under
@@ -188,12 +189,9 @@
                   (if (seq missed) (str "; " (pr-str (map :fixture missed))) "")))}))
 
 ;; ---------------------------------------------------------------------------
-;; experiment 7: one canonical form of a power, or two
-
-(def combine-only
-  "combine-powers as it was before experiment 7: the one-power-per-base
-  form alone."
-  (rules/normal-form-rule "combine-only" (fn [g _ p] (some-> (rules/combined-form g p) vector))))
+;; experiment 8: one power per base, by a charge on a repeated base
+;; (experiment 7's second arm, a second canonical form, went with
+;; `split-form`; its numbers are in ../design/ac-problem.md)
 
 (defn- offset-sum
   "Σ aᵢ · y^(n+1) for i < k, nested: k monomials that each have a
@@ -223,18 +221,23 @@
    ["sum of 100 a_i y^(n+1)" (offset-sum 100 false)]
    ["sum of 100 a_i y y^n" (offset-sum 100 true)]])
 
-(defn power-forms-rows
-  "One row per rule set for a workload entry: the cost reached, and
-  whether simplifying the result again reaches the same cost."
+(defn power-rows
+  "One row per cost for a workload entry, `bx/size` alone and the
+  default with its charge: the cost reached, whether simplifying the
+  result again reaches the same cost, and the extraction's share of
+  the time."
   [[label t]]
-  (for [[forms power-rules] [["one form " [combine-only]] ["two forms" rules/powers]]]
-    (let [rules (-> [] (into rules/trig) (into power-rules) (into rules/exp-log))
-          [ms r] (timed #(simplified t rules {}))
-          again (simplified (:result r) rules {})
-          g (:egraph r)]
-      {:fixture (str forms " " label) :n (:iterations r) :ms ms
-       :nodes (eg/node-count g) :classes (eg/class-count g)
-       :note (str "cost " (:cost r) (if (= (:cost r) (:cost again)) "" (str ", again " (:cost again))))})))
+  (let [rules (-> [] (into rules/trig) (into rules/powers) (into rules/exp-log))]
+    (for [[cost-name cost] [["size  " (constantly bx/size)] ["charge" bx/default-cost]]]
+      (let [[ms r] (timed #(simplified t rules {} cost))
+            again (simplified (:result r) rules {} cost)
+            g (:egraph r)
+            [extract-ms _] (timed #(ex/extract g (:root r) (cost g)))]
+        {:fixture (str cost-name " " label) :n (:iterations r) :ms ms
+         :nodes (eg/node-count g) :classes (eg/class-count g)
+         :note (str "cost " (:cost r)
+                    (if (= (:cost r) (:cost again)) "" (str ", again " (:cost again)))
+                    (format ", extraction %.2f ms" (double extract-ms)))}))))
 
 ;; ---------------------------------------------------------------------------
 ;; derivatives: a wide sum and a deep nesting
@@ -246,7 +249,7 @@
   [label t expected]
   (let [[ms {:keys [egraph root stop-reason iterations]}] (timed #(bx/saturate [:D t :x] {:rules rules/derivative}))
         g (bx/materialize-all egraph)
-        {:keys [term]} (ex/extract g root bx/no-D)]
+        {:keys [term]} (ex/extract g root (bx/no-D g))]
     {:fixture (str "d/dx " label) :n iterations :ms ms
      :nodes (eg/node-count g) :classes (eg/class-count g)
      :note (if (and (= :saturated stop-reason) (expected term)) "reached" (str "NOT reached: " (pr-str term)))}))
@@ -290,8 +293,8 @@
   (row (preference-row "lowest-degree" an/lowest-degree))
   (row (preference-row "fewest-atoms" an/fewest-atoms))
   (row (preference-row "most-terms" (an/most-terms 200)))
-  (println "experiment 7")
-  (doseq [w power-workload, r (power-forms-rows w)] (row r))
+  (println "experiment 8")
+  (doseq [w power-workload, r (power-rows w)] (row r))
   (println "derivatives")
   (doseq [n [10 100]] (row (wide-sum n)))
   (doseq [n [5 20]] (row (deep-nesting n)))

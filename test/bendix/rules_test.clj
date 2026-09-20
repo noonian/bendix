@@ -4,6 +4,7 @@
             [clojure.test.check.generators :as gen]
             [clojure.test.check.properties :as prop]
             [bendix.core :as bx :refer [simplify]]
+            [bendix.core-test :refer [never-grows? simplify-counting-repeats]]
             [bendix.poly :as p]
             [bendix.poly-test :refer [eval-term]]
             [bendix.rules :as rules]
@@ -25,8 +26,6 @@
         [g ib] (eg/add g b)
         {:keys [egraph]} (rw/embiggen g rules {})]
     (= (eg/find egraph ia) (eg/find egraph ib))))
-
-(defn- size [t] (if (vector? t) (reduce + 1 (map size (rest t))) 1))
 
 (defn- count-op [op t]
   (if (vector? t) (reduce + (if (= op (first t)) 1 0) (map #(count-op op %) (rest t))) 0))
@@ -153,23 +152,26 @@
 (defn- cost-powers [t] (:cost (simplify t {:rules both :too-big 50})))
 
 (deftest power-spellings-reach-one-cost
-  ;; whichever spelling the cost prefers exists, whatever the input
-  ;; wrote: the split one by a node for an offset of 1 beside another
-  ;; factor, the combined one otherwise
-  (is (= [6 6 6] (map cost-powers [[:* :a :y yn]
+  ;; one power per base is what the rule proposes and what the cost
+  ;; prefers to any product that repeats the base, whatever the input
+  ;; wrote, also where the product is a node smaller
+  (is (= [7 7 7] (map cost-powers [[:* :a :y yn]
                                    [:* :a [:expt :y [:+ :n 1]]]
                                    [:* [:* :a :y] yn]]))
-      "y · yⁿ is a node cheaper than y^(n+1) inside a product")
-  (is (= [:* :a :y yn] (simp-powers [:* :a [:expt :y [:+ :n 1]]])) "and is proposed for it")
+      "y · yⁿ is a node smaller than y^(n+1) inside a product, and pays for the base it repeats")
+  (is (= [:* :a [:expt :y [:+ :n 1]]] (simp-powers [:* :a [:expt :y [:+ :n 1]]])) "a power stays as written")
+  (is (= 1 (count-op :expt (simp-powers [:* :a :y yn]))) "and a product becomes one")
+  (is (= [:expt :y [:+ :n 1]] (simp-powers [:expt :y [:+ :n 1]])) "alone the two tie in size, not in cost")
+  (is (= [:expt :y 2] (simp-powers [:* :y :y])) "the ring's own power too")
   (is (= [7 7] (map cost-powers [[:* :a [:expt :y 2] yn] [:* :a [:expt :y [:+ :n 2]]]]))
-      "an offset of 2 is cheaper combined")
+      "an offset of 2")
   (is (= [7 7] (map cost-powers [[:* :a [:expt :y -1] yn] [:* :a [:expt :y [:+ :n -1]]]]))
-      "a negative offset is not split")
+      "a negative offset")
   (is (= [8 8] (map cost-powers [[:* :a :y yn [:expt :y :m]] [:* :a [:expt :y [:+ 1 :n :m]]]])))
-  (is (= [8 8] (map cost-powers [[:* :a :y [:expt :y [:* 2 :n]]] [:* :a [:expt :y [:+ 1 [:* 2 :n]]]]])))
+  (is (= [9 9] (map cost-powers [[:* :a :y [:expt :y [:* 2 :n]]] [:* :a [:expt :y [:+ 1 [:* 2 :n]]]]])))
   (is (apply = (map cost-powers [[:* :a [:sin :x] [:expt [:sin :x] :n]] [:* :a [:expt [:sin :x] [:+ :n 1]]]]))
       "an opaque base")
-  (is (= 0 (simp-powers [:- [:* :y :y yn] [:expt :y [:+ :n 2]]])) "the two forms are one class")
+  (is (= 0 (simp-powers [:- [:* :y :y yn] [:expt :y [:+ :n 2]]])) "the spellings are one class")
   (let [t [:+ [:* :x :x [:* [:* :x [:* [:* :x :y :x] yn] [:+ [:* :x :x] [:expt :y -1]]]
                          [:+ :x [:* [:+ [:sin :x] :x] [:* [:sin :x] :y]]]]] :x]
         {:keys [result cost]} (simplify t {:rules both :too-big 50})]
@@ -209,12 +211,12 @@
   (let [res (tc/quick-check
              200
              (prop/for-all [t pow-term-gen, env pow-env-gen]
-               (let [{:keys [result stop cost]} (simplify t {:rules both :too-big 50})
+               (let [{:keys [result stop cost] :as r} (simplify-counting-repeats t {:rules both :too-big 50})
                      again (simplify result {:rules both :too-big 50})
                      v (value t env)]
                  (and (= :saturated stop)
                       (or (= ::undefined v) (= v (value result env)))
-                      (<= (size result) (size t))
+                      (never-grows? t r)
                       (= cost (:cost again))))))]
     (is (:pass? res) (pr-str res))))
 
@@ -226,7 +228,6 @@
                  (empty? (check/violations (bx/materialize-all egraph))))))]
     (is (:pass? res) (pr-str res))))
 
-(def power-base-gen (gen/elements [:x :y [:sin :x]]))
 (def power-symbol-gen (gen/elements [:n :m [:+ :n :m] [:* 2 :n] [:* -1 :m]]))
 (def cofactor-gen (gen/elements [nil :a 2 [:sin :x] [:expt :x :m]]))
 
@@ -242,12 +243,21 @@
      (product [[:expt b s] bk])
      (if cofactor [:* [:* cofactor bk] [:expt b s]] [:* bk [:expt b s]])]))
 
+(defn- spellings-reach-one-cost
+  "The property: the four spellings of a power of a base from bases,
+  in a random context, reach one cost under rules."
+  [rules bases]
+  (prop/for-all [b (gen/elements bases), k (gen/choose 1 3), s power-symbol-gen
+                 cofactor cofactor-gen, context pow-term-gen]
+    (apply = (map #(:cost (simplify [:+ context %] {:rules rules :too-big 50}))
+                  (power-spellings b k s cofactor)))))
+
 (deftest power-spellings-reach-one-cost-in-any-context
-  (let [res (tc/quick-check
-             100
-             (prop/for-all [b power-base-gen, k (gen/choose 1 3), s power-symbol-gen
-                            cofactor cofactor-gen, context pow-term-gen]
-               (apply = (map #(cost-powers [:+ context %]) (power-spellings b k s cofactor)))))]
+  (let [res (tc/quick-check 100 (spellings-reach-one-cost rules/powers [:x :y [:sin :x]]))]
+    (is (:pass? res) (pr-str res)))
+  ;; with `pythagoras` beside it the base is not a sine: IDEA.md section
+  ;; 3, "Limits", a power of sin x written as a product beside sin²x
+  (let [res (tc/quick-check 100 (spellings-reach-one-cost both [:x :y]))]
     (is (:pass? res) (pr-str res))))
 
 ;; ---------------------------------------------------------------------------
@@ -300,11 +310,11 @@
   (let [res (tc/quick-check
              200
              (prop/for-all [t term-gen, env env-gen]
-               (let [{:keys [result stop cost]} (simplify t {:rules rules/trig :too-big 50})
+               (let [{:keys [result stop cost] :as r} (simplify-counting-repeats t {:rules rules/trig :too-big 50})
                      again (simplify result {:rules rules/trig :too-big 50})]
                  (and (= :saturated stop)
                       (= (eval-term t env) (eval-term result env))
-                      (<= (size result) (size t))
+                      (never-grows? t r)
                       (= cost (:cost again))))))]
     (is (:pass? res) (pr-str res))))
 
@@ -400,12 +410,12 @@
   (let [res (tc/quick-check
              200
              (prop/for-all [t exp-term-gen, env exp-env-gen]
-               (let [{:keys [result stop cost]} (simplify t {:rules all :too-big 50})
+               (let [{:keys [result stop cost] :as r} (simplify-counting-repeats t {:rules all :too-big 50})
                      again (simplify result {:rules all :too-big 50})
                      v (value t env)]
                  (and (= :saturated stop)
                       (or (= ::undefined v) (= v (value result env)))
-                      (<= (size result) (size t))
+                      (never-grows? t r)
                       (= cost (:cost again))))))]
     (is (:pass? res) (pr-str res))))
 

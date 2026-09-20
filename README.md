@@ -68,12 +68,15 @@ a class's polynomial, so it finds the pair however the sum or product
 is arranged; `bendix.rules/powers` combines the powers of one base
 inside any product the same way, and `bendix.rules/exp-log` the
 exponentials; `bendix.rules/normal-form-rule` builds more of them.
-`:cost` is a cromulent cost function; the default is AST size with a
-slight preference for the operators normal forms are written in. Two
-costs ship, `default-cost` and `no-D`, and under them equal spellings
-of a value reach one cost and the cost of a result is a fixpoint;
-any other cost function gets a sound result and no promise beyond
-that (IDEA.md section 6). `differentiate` is
+`:cost` is a function of the saturated e-graph that returns a
+cromulent cost function (`(constantly f)` for a plain one); the
+default is AST size with a slight preference for the operators normal
+forms are written in, and a charge on a product that repeats a base,
+so that `y·yⁿ` comes back as `y^(n+1)` and `y·y` as `y²`, as the
+established systems print them. Two costs ship, `default-cost` and
+`no-D`, and under them equal spellings of a value reach one cost and
+the cost of a result is a fixpoint; any other cost function gets a
+sound result and no promise beyond that (IDEA.md section 6). `differentiate` is
 `simplify` of `[:D t x]` under `bendix.rules/derivative`, where the
 ring part of a derivative is computed from the class's normal form
 and the chain rule is one pattern rule per operator, extracted under
@@ -83,7 +86,7 @@ and the chain rule is one pattern rule per operator, extracted under
 
 ```
 clojure -M:test     jolt -M:test     jolt test      # the suite, either runtime
-clojure -M:bench    jolt -M:bench                   # experiments 2, 4, 5, 6, 7 and simplifier timings
+clojure -M:bench    jolt -M:bench                   # experiments 2, 4, 5, 6, 8 and simplifier timings
 ```
 
 [IDEA.md](IDEA.md) is the design and status.

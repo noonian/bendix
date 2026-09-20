@@ -72,7 +72,7 @@
   (let [r (differentiate [:abs :x] :x)]
     (is (= [:D [:abs :x] :x] (:result r)) "no rule for abs: the derivative stays, honestly")
     (is (= #{[:D [:abs :x] :x]} (:undifferentiated r)))
-    (is (= (bx/default-cost [:abs 0] [1]) (first (:cost r))) "the cost of what is under the :D"))
+    (is (= (bx/size [:abs 0] [1]) (first (:cost r))) "the cost of what is under the :D"))
   (let [r (differentiate [:* :x [:abs :x]] :x)]
     (is (= [:+ [:* :x [:D [:abs :x] :x]] [:abs :x]] (:result r)) "pushed inward as far as the rules go")
     (is (= #{[:D [:abs :x] :x]} (:undifferentiated r))))
