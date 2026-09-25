@@ -480,7 +480,21 @@ well-formed; saturation takes at most `d + 2` iterations.
 
 **Limits, named.** `abs` waits for the `abs-sign` rule set; `|x|²`
 therefore keeps a `:D` though `x²` would not, because the chain rule
-sees the atom and not through it. A derivative with respect to
+sees the atom and not through it. A derivative whose root class
+passes the `:too-big` threshold is extracted as the rendered total
+derivative with its atoms' derivatives substituted in, and that
+spelling can hold literal zero summands and monomials that became
+equal only once those derivatives resolved; a second `simplify` of
+the result, a smaller term that fits the threshold, collects them
+and costs less, so the cost fixpoint of section 6 does not hold
+across the threshold (found 2026-09-25 by the trig property's seed
+1790343606336: a product of two sums holding `x/x` and `x⁻¹`,
+48 summands with 6 zeros at the test's threshold of 50 and cost
+4807/16, against 41 summands and 4567/16 at 100 or above; identical
+on the engine before and after that day's cromulent change). The
+honest fix is either a rendering that collects like terms and drops
+zeros without a class polynomial, or a threshold that the derivative
+front door raises for the root; neither is designed. A derivative with respect to
 anything but an undefined variable is left alone by `ring-derivative`
 and `independent`, while the chain rules, which are formal, still
 peel operators off it. Integer-valued exponents that vary with `x`
@@ -1458,5 +1472,11 @@ recorded there, a numeric base never meets its coefficient
 (`2·2ⁿ`), and in section 9, results that tie can differ as terms.
 Section 8 lists, with sources, where a system that holds every form
 can differ from those that hold one.
+
+Open, found 2026-09-25 by a random seed of the trig derivative
+property and reproduced on the engine before and after that day's
+cromulent change: the cost fixpoint fails for a derivative whose root
+class passes the `:too-big` threshold (section 3, "Limits, named").
+The property fails about once in eight runs of 200 trials.
 
 Not yet: everything in section 10, other syntaxes, explanations.
