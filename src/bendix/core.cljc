@@ -28,6 +28,7 @@
             [bendix.rules :as rules]
             [bendix.term :as bt]
             [cromulent.core :as eg]
+            [cromulent.export :as export]
             [cromulent.extract :as ex]
             [cromulent.rewrite :as rw]
             [cromulent.term :as term]))
@@ -152,6 +153,32 @@
                      (first (eg/union g nid r))))))
              g
              (eg/roots g)))))
+
+(defn class-data
+  "The class of id as the polynomial analysis sees it, as class data
+  for `cromulent.export`: {\"type\" kind}, kind being polynomial, atom,
+  too-big or conflict, and for a polynomial \"poly\", the normal form
+  as a term in the native spelling, an opaque class written #id; nil
+  for a class with no data."
+  [g id]
+  (let [d (an/canonical g (eg/data g id :poly))
+        class-sym (fn [c] (symbol (str "#" c)))
+        atom->term (fn [a] (cond (bt/variable? a) a
+                                 (bt/placeholder? a) (bt/map-class-ids class-sym a)
+                                 :else (class-sym a)))]
+    (cond (an/polynomial? d) {"type" "polynomial" "poly" (pr-str (poly/->term d atom->term))}
+          (an/atom? d) {"type" "atom"}
+          (keyword? d) {"type" (name d)}
+          :else nil)))
+
+(defn serialize
+  "g in the egraph-serialize format (`cromulent.export/serialize`),
+  each class carrying its polynomial as class data and each node its
+  cost under `default-cost`; opts as the export takes them, over
+  these. `cromulent.export/->json` prints it."
+  ([g] (serialize g {}))
+  ([g opts]
+   (export/serialize g (merge {:cost (default-cost g) :class-data class-data} opts))))
 
 (def ^:private runner-keys
   [:iter-limit :node-limit :time-limit-ms :scheduler :match-limit :ban-length :timeline?])

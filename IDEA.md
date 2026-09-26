@@ -1496,3 +1496,11 @@ per-rule counts, costs as doubles, a ratio printed and read back)
 asserted by `bendix.smoke-test` here and by orrery's node build and
 browser self-test; all of them agree on the three runtimes. The
 suite is 75 tests, 419 assertions.
+
+The export (2026-09-26, for ../orrery; 76 tests, 428 assertions):
+`bendix.core/class-data`, the class as the polynomial analysis sees
+it for `cromulent.export`, its kind as the `type` (polynomial, atom,
+too-big, conflict) and a polynomial's normal form as a term in the
+native spelling with an opaque class written `#id`; and
+`bendix.core/serialize`, the egraph-serialize data of a graph with
+that class data and every node costed under `default-cost`.

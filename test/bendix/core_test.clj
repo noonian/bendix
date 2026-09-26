@@ -6,6 +6,8 @@
             [bendix.core :as bx :refer [simplify]]
             [bendix.poly-test :refer [eval-term]]
             [cromulent.check :as check]
+            [cromulent.core :as eg]
+            [cromulent.export :as export]
             [cromulent.extract :as ex]))
 
 (deftest textbook
@@ -101,3 +103,25 @@
                (let [{:keys [egraph]} (bx/saturate t {:too-big 50})]
                  (empty? (check/violations (bx/materialize-all egraph))))))]
     (is (:pass? res) (pr-str res))))
+
+;; ---------------------------------------------------------------------------
+;; the export
+
+(deftest the-export-carries-the-polynomials-as-class-data
+  (let [[g id] (eg/add (bx/egraph) [:+ [:* 2 :x] [:* 3 :x]])
+        d (bx/serialize g {:roots [id]})
+        nodes (get d "nodes")
+        data (get d "class_data")]
+    (is (= [(str id)] (get d "root_eclasses")))
+    (is (= {"type" "polynomial" "poly" "[:* 5 :x]"} (get data (str id))) "the sum's class is worth 5x")
+    (is (= {"type" "polynomial" "poly" ":x"} (get data (str (eg/find g (eg/lookup g :x))))))
+    (is (= {"type" "polynomial" "poly" "2"} (get data (str (eg/find g (eg/lookup g 2))))))
+    (is (every? #(number? (get % "cost")) (vals nodes)) "every node has a cost under the default cost")
+    (is (= 1 (get-in nodes [(str (eg/find g (eg/lookup g :x)) ".0") "cost"])))
+    (is (= "{" (subs (export/->json d) 0 1)))
+    (testing "an opaque class is an atom, and a polynomial over it names it #id"
+      (let [[g id] (eg/add (bx/egraph) [:+ [:sin :x] [:sin :x]])
+            d (bx/serialize g {:roots [id]})
+            s (eg/find g (eg/lookup g [:sin (eg/lookup g :x)]))]
+        (is (= {"type" "atom"} (get-in d ["class_data" (str s)])))
+        (is (= {"type" "polynomial" "poly" (str "[:* 2 #" s "]")} (get-in d ["class_data" (str id)])))))))
