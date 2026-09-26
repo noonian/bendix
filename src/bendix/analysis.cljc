@@ -38,7 +38,8 @@
   constant -β/α (a = a/2 gives a = 0; a = 2a + 1 gives a = -1). Under
   a ring-only rule set no such pair can be sound, which is what
   `inconsistency` checks in dev mode."
-  (:require [bendix.poly :as poly]
+  (:require [bendix.num :as num]
+            [bendix.poly :as poly]
             [bendix.term :as bt]
             [cromulent.core :as eg]
             [cromulent.term :as term]))
@@ -200,12 +201,12 @@
                                      (not (and e (integer? e))) nil
                                      (not (neg? e)) (or (poly/expt (nth ps 0) e too-big) ::too-big)
                                      ;; a non-zero constant to a negative integer power is a constant
-                                     (and k (not (zero? k))) (poly/constant (/ 1 (reduce *' 1 (repeat (- e) k))))
+                                     (and k (not (zero? k))) (poly/constant (num/div 1 (num/expt k (- e))))
                                      :else nil)))
                          :/ (when (= 2 n)
                               (let [k (poly/constant-value (nth ps 1))]
                                 (when (and k (not (zero? k)))
-                                  (poly/scale (nth ps 0) (/ 1 k)))))
+                                  (poly/scale (nth ps 0) (num/div 1 k)))))
                          nil)]
             (cond
               (nil? result) ::opaque

@@ -1480,3 +1480,19 @@ class passes the `:too-big` threshold (section 3, "Limits, named").
 The property fails about once in eight runs of 200 trials.
 
 Not yet: everything in section 10, other syntaxes, explanations.
+
+The port to ClojureScript (2026-09-25, for ../orrery): the five
+source namespaces renamed to `.cljc`, and `bendix.num` added as the
+numeric seam (README, Portability). Everything else compiled
+unchanged. The edits were the coefficient sites: `+'`, `*'`, `/`,
+`ratio?`, `numerator`, `denominator`, `abs` and `compare` on
+coefficients in `bendix.poly`, the two constant folds in
+`bendix.analysis`, the exponent sums in `bendix.rules` and
+`d-power`'s arithmetic, and `65/64` in `bendix.core/size` written as
+a division, the ClojureScript compiler having no ratio constant.
+Exponents stay plain integers. Tests: `bendix.num-test` on the JVM
+and Jolt, and `bendix.smoke`, twenty-five facts (results, counts,
+per-rule counts, costs as doubles, a ratio printed and read back)
+asserted by `bendix.smoke-test` here and by orrery's node build and
+browser self-test; all of them agree on the three runtimes. The
+suite is 75 tests, 419 assertions.

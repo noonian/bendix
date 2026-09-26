@@ -89,4 +89,16 @@ clojure -M:test     jolt -M:test     jolt test      # the suite, either runtime
 clojure -M:bench    jolt -M:bench                   # experiments 2, 4, 5, 6, 8 and simplifier timings
 ```
 
+## Portability
+
+The six source namespaces are `.cljc` and compile under ClojureScript
+too (../orrery runs them in the browser). `bendix.num` is the one
+seam: exact rational arithmetic that is Clojure's own on the JVM and
+Jolt, and in ClojureScript a `Ratio` type for non-integer rationals
+with integers kept within 2^53 (an operation past it throws), plus
+`read-string`, the EDN reader with `1/2` exact on every runtime.
+`bendix.smoke` (`test/`) is a table of results, counts and costs that
+must agree on all three runtimes; `bendix.smoke-test` asserts it here,
+and orrery's `npm run smoke` on node.
+
 [IDEA.md](IDEA.md) is the design and status.

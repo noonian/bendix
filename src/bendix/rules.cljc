@@ -27,6 +27,7 @@
   rules; the chain rule is one pattern rule per operator; and
   `independent` is [:D ?u ?x] = 0 when ?u cannot depend on ?x."
   (:require [bendix.analysis :as an]
+            [bendix.num :as num]
             [bendix.poly :as poly]
             [bendix.term :as bt]
             [cromulent.core :as eg]
@@ -201,8 +202,8 @@
                            groups)]
     (when (seq combinable)
       (reduce (fn [m [b fs]]
-                (let [k (reduce +' 0 (map #(*' (:k %) (:e %)) fs))
-                      syms (reduce (fn [acc f] (if (:sym f) (update acc (:sym f) (fnil +' 0) (:e f)) acc)) {} fs)
+                (let [k (reduce num/add 0 (map #(num/mul (:k %) (:e %)) fs))
+                      syms (reduce (fn [acc f] (if (:sym f) (update acc (:sym f) (fnil num/add 0) (:e f)) acc)) {} fs)
                       power (bt/placeholder :expt [(bt/class-ref b) (exponent-placeholder k syms)])]
                   (assoc (reduce dissoc m (map :atom fs)) power 1)))
               m
@@ -294,8 +295,8 @@
                    (let [f (nth fs 0)] (and (= 1 (:e f)) (= 1 (:k f)) (nil? (:sym f)))))]
     (when (and (seq fs) (not lone?))
       (let [by-u (reduce (fn [acc {:keys [u k sym e]}]
-                           (cond-> (update-in acc [u :k] (fnil +' 0) (*' k e))
-                             sym (update-in [u :syms sym] (fnil +' 0) e)))
+                           (cond-> (update-in acc [u :k] (fnil num/add 0) (num/mul k e))
+                             sym (update-in [u :syms sym] (fnil num/add 0) e)))
                          {}
                          fs)
             terms (keep (fn [[u {:keys [k syms]}]]
@@ -453,9 +454,9 @@
                    du (when (an/polynomial? d) (poly/constant-value (derivative-form d x xid)))]
                (cond
                  (or (nil? n) (zero? n)) nil
-                 (nil? du) [:* n [:expt '?u (- n 1)] [:D '?u '?x]]
+                 (nil? du) [:* n [:expt '?u (num/sub n 1)] [:D '?u '?x]]
                  (zero? du) 0
-                 :else [:* (*' n du) [:expt '?u (- n 1)]])))))
+                 :else [:* (num/mul n du) [:expt '?u (num/sub n 1)]])))))
 
 (def d-power-symbolic
   "u^v (v·u'/u + log u · v'), spelled v·u^(v−1)·u' + u^v·log u·v', for

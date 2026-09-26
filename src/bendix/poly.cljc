@@ -10,13 +10,15 @@
   and it is well-founded: below any polynomial there are only finitely
   many others, which is what lets an e-class analysis that keeps the
   smallest form converge.
-  Coefficient arithmetic promotes to bignums; nothing here overflows.
+  Coefficient arithmetic is bendix.num's: bignums on the JVM and on
+  Jolt, exact within 2^53 in ClojureScript, where passing it throws.
 
   Atoms are opaque here; bendix.term says what they mean (a
   variable, an e-class id, a placeholder). This namespace only orders
   them: keywords first, then integers, then anything else by its
   printed form. `map-atoms` renames them; `substitute` replaces them
-  by polynomials.")
+  by polynomials."
+  (:require [bendix.num :as num]))
 
 ;; ---------------------------------------------------------------------------
 ;; construction and arithmetic
@@ -40,7 +42,7 @@
   (some? (constant-value p)))
 
 (defn- add-term [p m c]
-  (let [c' (+' (get p m 0) c)]
+  (let [c' (num/add (get p m 0) c)]
     (if (zero? c') (dissoc p m) (assoc p m c'))))
 
 (defn add [p q]
@@ -49,7 +51,7 @@
 (defn scale [p k]
   (if (zero? k)
     zero
-    (reduce-kv (fn [acc m c] (assoc acc m (*' c k))) {} p)))
+    (reduce-kv (fn [acc m c] (assoc acc m (num/mul c k))) {} p)))
 
 (defn neg [p] (scale p -1))
 
@@ -59,7 +61,7 @@
 
 (defn mul [p q]
   (reduce-kv (fn [acc m1 c1]
-               (reduce-kv (fn [acc m2 c2] (add-term acc (mul-monomials m1 m2) (*' c1 c2)))
+               (reduce-kv (fn [acc m2 c2] (add-term acc (mul-monomials m1 m2) (num/mul c1 c2)))
                           acc
                           q))
              zero
@@ -109,7 +111,7 @@
                (let [e (get m a 0)]
                  (if (zero? e)
                    acc
-                   (add-term acc (if (= 1 e) (dissoc m a) (assoc m a (dec e))) (*' c e)))))
+                   (add-term acc (if (= 1 e) (dissoc m a) (assoc m a (dec e))) (num/mul c e)))))
              zero
              p))
 
@@ -162,11 +164,9 @@
   "The value of p under env, a map from atom to number."
   [p env]
   (reduce-kv (fn [acc m c]
-               (+' acc (*' c (reduce-kv (fn [v a e]
-                                          (let [x (get env a)]
-                                            (*' v (reduce *' 1 (repeat e x)))))
-                                        1
-                                        m))))
+               (num/add acc (num/mul c (reduce-kv (fn [v a e] (num/mul v (num/expt (get env a) e)))
+                                                  1
+                                                  m))))
              0
              p))
 
@@ -194,13 +194,13 @@
   "|numerator| + denominator: a natural number, so that only finitely
   many coefficients are smaller than any given one."
   [c]
-  (if (ratio? c)
-    (+' (abs (numerator c)) (denominator c))
-    (+' (abs c) 1)))
+  (if (num/ratio? c)
+    (num/add (num/abs (num/numerator c)) (num/denominator c))
+    (num/add (num/abs c) 1)))
 
 (defn- compare-coefficients [a b]
   (let [c (compare (coefficient-size a) (coefficient-size b))]
-    (if (not= 0 c) c (compare a b))))
+    (if (not= 0 c) c (num/cmp a b))))
 
 (defn compare-polys
   "A total order: fewer terms first, then lower degree, then smaller
@@ -217,8 +217,8 @@
       (let [c (compare (degree p) (degree q))]
         (if (not= 0 c)
           c
-          (let [c (compare (reduce +' 0 (map coefficient-size (vals p)))
-                           (reduce +' 0 (map coefficient-size (vals q))))]
+          (let [c (compare (reduce num/add 0 (map coefficient-size (vals p)))
+                           (reduce num/add 0 (map coefficient-size (vals q))))]
             (if (not= 0 c)
               c
               (loop [ps (sorted-terms p), qs (sorted-terms q)]
@@ -241,7 +241,7 @@
             alpha (get p {v 1})
             beta (get p {} 0)]
         (when (and alpha (<= (count p) 2))
-          [v (- (/ beta alpha))])))))
+          [v (num/neg (num/div beta alpha))])))))
 
 (defn smaller
   "The smaller of p and q under `compare-polys`."

@@ -7,7 +7,7 @@
   read:
 
     variable     a keyword in leaf position                :x
-    constant     an exact number                           2, 1/2
+    constant     an exact number (bendix.num)              2, 1/2
     class id     an integer naming an e-class; occurs only in
                  analysis data and placeholders, never in a term
     placeholder  a node the graph may not hold yet, over class
@@ -20,7 +20,8 @@
   a placeholder. Rules and analyses ask their questions here rather
   than testing types in place, so the format can change (a record, a
   protocol) in one namespace."
-  (:require [cromulent.core :as eg]
+  (:require [bendix.num :as num]
+            [cromulent.core :as eg]
             [cromulent.term :as term]))
 
 ;; ---------------------------------------------------------------------------
@@ -32,9 +33,9 @@
   (keyword? x))
 
 (defn constant?
-  "Is x a constant (an exact number)?"
+  "Is x a constant (an exact number: an integer or a ratio)?"
   [x]
-  (or (integer? x) (ratio? x)))
+  (num/rational? x))
 
 (defn class-id?
   "Is a, an atom of a polynomial, an e-class id?"

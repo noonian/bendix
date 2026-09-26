@@ -42,11 +42,14 @@
 (defn size
   "AST size, with a slight preference for the operators normal forms
   are written in: x/2 and (1/2)·x have the same size, and this picks
-  the latter. Exact, so results are the same on every runtime. A plain
-  cromulent cost; `default-cost` is this and a charge."
+  the latter. Exact, so results are the same on every runtime: 65/64
+  is a ratio on the JVM and Jolt and the exact double 1.015625 in
+  JavaScript, written as a division because the ClojureScript
+  compiler has no ratio constant. A plain cromulent cost;
+  `default-cost` is this and a charge."
   [node child-costs]
   (+ (if (and (term/compound? node) (not (contains? normal-form-operators (term/operator node))))
-       65/64
+       (/ 65 64)
        1)
      (reduce + child-costs)))
 
