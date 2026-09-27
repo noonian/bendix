@@ -11,6 +11,12 @@ jobs:
       - uses: DeLaGuardo/setup-clojure@13.0
         with:
           cli: latest
+      - name: Deploy key for cromulent
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.CROMULENT_DEPLOY_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan github.com >> ~/.ssh/known_hosts
       - run: clojure -M:test
 
   jolt:
@@ -22,6 +28,13 @@ jobs:
         run: |
           eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
           brew tap jolt-lang/jolt
+          brew trust jolt-lang/jolt
           brew install jolt
           echo "/home/linuxbrew/.linuxbrew/bin" >> "$GITHUB_PATH"
+      - name: Deploy key for cromulent
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.CROMULENT_DEPLOY_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan github.com >> ~/.ssh/known_hosts
       - run: jolt -M:test

@@ -1,14 +1,18 @@
 {:paths ["src"]
  :deps {org.clojure/clojure {:mvn/version "1.12.0"}
-        noonian/cromulent {:local/root "../cromulent"}}
+        io.github.noonian/cromulent {:git/url "git@github.com:noonian/cromulent.git"
+                                     :git/sha "7512173f21645c33d2910483ec08e7d6b785b0c6"}}
  :aliases
- {:test {:extra-paths ["test" "../cromulent/test"]
+ {;; the cromulent checkout beside this one in place of the pinned sha:
+  ;; clojure -M:local:test, jolt -M:local:test
+  :local {:override-deps {io.github.noonian/cromulent {:local/root "../cromulent"}}}
+  :test {:extra-paths ["test"]
          :extra-deps {org.clojure/test.check {:mvn/version "1.1.1"}}
          :main-opts ["-m" "bendix.test-runner"]}
   :bench {:extra-paths ["bench"]
           :main-opts ["-m" "bendix.bench"]}}
  :tasks
- {test {:extra-paths ["test" "../cromulent/test"]
+ {test {:extra-paths ["test"]
         :extra-deps {org.clojure/test.check {:mvn/version "1.1.1"}}
         :main-opts ["-m" "bendix.test-runner"]}
   bench {:extra-paths ["bench"]
