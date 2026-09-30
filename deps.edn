@@ -1,6 +1,6 @@
 {:paths ["src"]
  :deps {org.clojure/clojure {:mvn/version "1.12.0"}
-        io.github.noonian/cromulent {:git/sha "7512173f21645c33d2910483ec08e7d6b785b0c6"}}
+        io.github.noonian/cromulent {:git/sha "e5fcdfdf8e019ab6b5015c9d22beb3fc2001c9cc"}}
  :aliases
  {;; the cromulent checkout beside this one in place of the pinned sha:
   ;; clojure -M:local:test, jolt -M:local:test
