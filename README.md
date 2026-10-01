@@ -5,6 +5,19 @@ A symbolic simplifier for Clojure built on
 [Jolt](https://github.com/jolt-lang/jolt) and the JVM from one source.
 Named for Knuth–Bendix completion.
 
+**Status: a toy.** bendix is a vehicle for learning and
+experimentation, built largely with an LLM. Nothing about its API,
+results or performance is promised; do not build on it. For computer
+algebra in Clojure, use
+[Emmy](https://github.com/mentat-collective/emmy), the mature
+Clojure(Script) port of MIT's scmutils (by way of SICMUtils): generic
+arithmetic, a rule-based simplifier over polynomial and
+rational-function canonical forms, automatic and symbolic
+differentiation, TeX rendering, and the mechanics and differential
+geometry of *SICM* and *FDG*. For an e-graph in Clojure, see
+[ansatz](https://github.com/replikativ/ansatz), whose `grind` tactic is
+a persistent e-graph with congruence closure.
+
 Terms are tagged vectors: keywords at the head are operators,
 keywords elsewhere are variables, numbers are exact.
 
