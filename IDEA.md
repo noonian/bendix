@@ -780,8 +780,9 @@ back when something needs them.
 
 - `default-cost`: fewest nodes (`size`: with a slight preference,
   1/64 of a node, for the operators normal forms are written in, so
-  that of `x/2` and `(1/2)·x` the latter wins), and a product pays 2
-  for each base it repeats ("The spelling of a power", below). The
+  that of `x/2` and `(1/2)·x` the latter wins), and a product whose
+  class is one monomial pays 2 for each base it repeats ("The
+  spelling of a power", below). The
   default. Ties that remain go to cromulent's deterministic node
   order, so a result is the same on both runtimes.
 - `no-D`: the cost of a term as the vector `[undifferentiated, size]`,
@@ -893,7 +894,14 @@ The charge is a constant on a node, so the cost stays monotone; a
 result under `powers` pays it only where the rule could not combine,
 so the cost reported for a result is otherwise its size as before;
 and a product that repeats a base where no rule can combine it pays
-the same in every spelling and loses nothing.
+the same in every spelling and loses nothing. The charge is only for
+a product whose class is one monomial: a product whose class is a sum
+of monomials, `x²·sin x · (−sin x) · (sin x − 1)`, has no spelling
+with one power per base, and its expansion is a different shape that
+repeats nothing, so a charge there only paid the expansion to grow.
+Until 2026-10-01 every product paid it, and that term, 16 nodes with
+two repeats, became its 19-node expansion by the 1/64 preference
+(the never-grows property, seed 1790827792477).
 
 The cost needs the e-graph, which `(fn [node child-costs])` does not
 see. egg's idiom for this is a cost function that closes over the

@@ -96,6 +96,13 @@
                       (= cost (:cost again))))))]
     (is (:pass? res) (pr-str res))))
 
+(deftest a-repeat-in-a-sum-of-monomials-is-not-charged
+  (let [t [:+ [:* [:* :x :x [:sin :x]] [:* -1 [:sin :x]] [:+ [:sin :x] -1]] :x]
+        r (simplify-counting-repeats t {:too-big 50})]
+    (is (never-grows? t r)
+        "the term seed 1790827792477 shrank to: the charge for sin x made the 19-node expansion win")
+    (is (= 1 (:repeats r)) "x · x is charged, sin x across a product that is a sum is not")))
+
 (deftest the-graph-behind-simplify-is-well-formed
   (let [res (tc/quick-check
              100

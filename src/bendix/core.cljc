@@ -60,15 +60,17 @@
 
 (defn- product-bases
   "Class id -> `bendix.rules/power-bases` of it, for every class that is a
-  child of a :* node of g."
+  child of a :* node of g, and :monomial, the set of :* nodes whose
+  class is one monomial: the products a power could be combined in."
   [g]
   (reduce (fn [table r]
             (reduce (fn [table node]
                       (if (product? node)
-                        (reduce (fn [table c]
-                                  (if (contains? table c) table (assoc table c (rules/power-bases g c))))
-                                table
-                                (term/children node))
+                        (cond-> (reduce (fn [table c]
+                                          (if (contains? table c) table (assoc table c (rules/power-bases g c))))
+                                        table
+                                        (term/children node))
+                          (rules/power-bases g r) (update :monomial (fnil conj #{}) node))
                         table))
                     table
                     (eg/nodes g r)))
@@ -76,30 +78,37 @@
           (eg/roots g)))
 
 (defn- repeated-bases
-  "How many bases appear in more than one child of the :* node."
+  "How many bases appear in more than one child of the :* node, or 0
+  when its class is not one monomial: no spelling of a sum of
+  monomials is a product with one power per base, so a repeat there
+  is not charged (`y²·(y − 1)` is written as `y · y · (y − 1)` would
+  be, and is not made to lose to its expansion)."
   [g table node]
-  (let [seen (reduce (fn [seen c]
-                       (reduce (fn [seen b] (update seen b (fnil inc 0)))
-                               seen
-                               (get table (eg/find g c))))
-                     {}
-                     (term/children node))]
-    (count (filter #(< 1 (val %)) seen))))
+  (if-not (contains? (:monomial table) node)
+    0
+    (let [seen (reduce (fn [seen c]
+                         (reduce (fn [seen b] (update seen b (fnil inc 0)))
+                                 seen
+                                 (get table (eg/find g c))))
+                       {}
+                       (term/children node))]
+      (count (filter #(< 1 (val %)) seen)))))
 
 (def repeated-base-charge
-  "What a :* node pays for each base that appears in more than one of
-  its children. One power per base is never more than a node larger
-  than the same product with the base repeated, so 2 makes it the
-  cheaper by at least one (IDEA.md section 6)."
+  "What a :* node whose class is one monomial pays for each base that
+  appears in more than one of its children. One power per base is
+  never more than a node larger than the same product with the base
+  repeated, so 2 makes it the cheaper by at least one (IDEA.md
+  section 6)."
   2)
 
 (defn default-cost
-  "The default cost for the e-graph g: `size`, and a product pays
-  `repeated-base-charge` for each base it repeats, so y · y^n loses to
-  y^(n+1) and y · y to y^2, as the established systems print them. The
-  bases of a child are read from its class's canonical form
-  (`bendix.rules/power-bases`), so the charge sees through nesting. A
-  constant on a node: monotone as `size` is."
+  "The default cost for the e-graph g: `size`, and a product that is
+  one monomial pays `repeated-base-charge` for each base it repeats,
+  so y · y^n loses to y^(n+1) and y · y to y^2, as the established
+  systems print them. The bases of a child are read from its class's
+  canonical form (`bendix.rules/power-bases`), so the charge sees
+  through nesting. A constant on a node: monotone as `size` is."
   [g]
   (let [table (product-bases g)]
     (fn [node child-costs]
