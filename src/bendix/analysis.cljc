@@ -38,7 +38,7 @@
   constant -β/α (a = a/2 gives a = 0; a = 2a + 1 gives a = -1). Under
   a ring-only rule set no such pair can be sound, which is what
   `inconsistency` checks in dev mode."
-  (:require [bendix.num :as num]
+  (:require [bendix.algebra :as alg]
             [bendix.poly :as poly]
             [bendix.term :as bt]
             [cromulent.core :as eg]
@@ -56,6 +56,11 @@
   [g]
   (:too-big (the-analysis g)))
 
+(defn algebra-of
+  "The coefficient algebra of g's polynomial analysis."
+  [g]
+  (:algebra (the-analysis g)))
+
 ;; ---------------------------------------------------------------------------
 ;; canonical forms
 
@@ -63,8 +68,8 @@
 
 (defn- itself?
   "Is the polynomial d the atom a to the first power and nothing else?"
-  [d a]
-  (and (= 1 (count d)) (= 1 (get d {a 1}))))
+  [algebra d a]
+  (and (= 1 (count d)) (= (alg/one algebra) (get d {a 1}))))
 
 (defn- definition
   "What the atom a, a variable or a root, stands for in a canonical
@@ -80,14 +85,14 @@
             a)
         d (when r (eg/data g r :poly))]
     (cond
-      (or (nil? r) (not (polynomial? d)) (itself? d a)) ::self
+      (or (nil? r) (not (polynomial? d)) (itself? (algebra-of g) d a)) ::self
       (contains? visited r) ::cyclic
       :else (expand g d (conj visited r) limit))))
 
 (defn- roots
   "p with every class-id atom replaced by its root."
   [g p]
-  (poly/map-atoms #(if (bt/variable? %) % (eg/find g %)) p))
+  (poly/map-atoms (algebra-of g) #(if (bt/variable? %) % (eg/find g %)) p))
 
 (defn- substitutions
   "The substitution of every defined atom of p by its definition, as
@@ -113,7 +118,7 @@
     (cond
       (keyword? subst) subst
       (empty? subst) p
-      :else (or (poly/substitute p subst limit) ::too-big))))
+      :else (or (poly/substitute (algebra-of g) p subst limit) ::too-big))))
 
 (defn canonical
   "d with every class-id atom replaced by its root in g, and every
@@ -133,7 +138,7 @@
       (cond
         (keyword? subst) :too-big
         (empty? subst) p
-        :else (or (poly/substitute p subst limit) :too-big)))
+        :else (or (poly/substitute (algebra-of g) p subst limit) :too-big)))
     :else d))
 
 (defn- note-defined-variables
@@ -142,14 +147,14 @@
   variable. Returns g'."
   [g id d]
   (reduce (fn [g v]
-            (if (and (polynomial? d) (itself? d v))
+            (if (and (polynomial? d) (itself? (algebra-of g) d v))
               (update-in g [:analysis-state :defined] disj v)
               (update-in g [:analysis-state :defined] (fnil conj #{}) v)))
           g
           (filter bt/variable? (eg/nodes g id))))
 
-(defn- as-poly [d]
-  (if (atom? d) (poly/variable (:atom d)) d))
+(defn- as-poly [algebra d]
+  (if (atom? d) (poly/variable algebra (:atom d)) d))
 
 ;; ---------------------------------------------------------------------------
 ;; make
@@ -158,10 +163,11 @@
 
 (defn- exact-value
   "The constant an :exp or :log node is worth at the one point where
-  that is exact, exp 0 = 1 and log 1 = 0; ::opaque otherwise."
+  that is exact, exp 0 = 1 and log 1 = 0; ::opaque otherwise, and
+  over any algebra but the rationals."
   [g node]
   (let [op (term/operator node)
-        d (when (= 1 (term/arity node))
+        d (when (and (= 1 (term/arity node)) (identical? alg/rational (algebra-of g)))
             (canonical g (eg/data g (term/child node 0) :poly)))]
     (cond
       (not (polynomial? d)) ::opaque
@@ -186,27 +192,27 @@
           (some #{:conflict} ds) :conflict
           (some #{:too-big} ds) :too-big
           :else
-          (let [ps (mapv as-poly ds)
+          (let [algebra (algebra-of g)
+                ps (mapv #(as-poly algebra %) ds)
                 result (case op
-                         :+ (poly/sum ps)
-                         :* (poly/product ps)
-                         :neg (when (= 1 n) (poly/neg (nth ps 0)))
-                         :- (cond (= 1 n) (poly/neg (nth ps 0))
-                                  (= 2 n) (poly/sub (nth ps 0) (nth ps 1))
+                         :+ (poly/sum algebra ps)
+                         :* (poly/product algebra ps)
+                         :neg (when (= 1 n) (poly/neg algebra (nth ps 0)))
+                         :- (cond (= 1 n) (poly/neg algebra (nth ps 0))
+                                  (= 2 n) (poly/sub algebra (nth ps 0) (nth ps 1))
                                   :else nil)
                          :expt (when (= 2 n)
-                                 (let [e (poly/constant-value (nth ps 1))
-                                       k (poly/constant-value (nth ps 0))]
+                                 (let [e (poly/constant-value algebra (nth ps 1))
+                                       k (poly/constant-value algebra (nth ps 0))]
                                    (cond
                                      (not (and e (integer? e))) nil
-                                     (not (neg? e)) (or (poly/expt (nth ps 0) e too-big) ::too-big)
-                                     ;; a non-zero constant to a negative integer power is a constant
-                                     (and k (not (zero? k))) (poly/constant (num/div 1 (num/expt k (- e))))
+                                     (not (neg? e)) (or (poly/expt algebra (nth ps 0) e too-big) ::too-big)
+                                     ;; a unit to a negative integer power is a constant
+                                     k (some->> (alg/inv algebra (alg/pow algebra k (- e))) (poly/constant algebra))
                                      :else nil)))
                          :/ (when (= 2 n)
-                              (let [k (poly/constant-value (nth ps 1))]
-                                (when (and k (not (zero? k)))
-                                  (poly/scale (nth ps 0) (num/div 1 k)))))
+                              (let [k (poly/constant-value algebra (nth ps 1))]
+                                (some->> (when k (alg/inv algebra k)) (poly/scale algebra (nth ps 0)))))
                          nil)]
             (cond
               (nil? result) ::opaque
@@ -232,10 +238,10 @@
   "The class id c when the polynomial d is c to the first power with
   coefficient 1 and nothing else: the form a class worth exactly the
   class c computes (sin x · 1). nil otherwise."
-  [d]
+  [algebra d]
   (when (and (polynomial? d) (= 1 (count d)))
     (let [[m c] (first d)]
-      (when (and (= 1 c) (= 1 (count m)))
+      (when (and (= (alg/one algebra) c) (= 1 (count m)))
         (let [[a e] (first m)]
           (when (and (= 1 e) (bt/class-id? a)) a))))))
 
@@ -264,13 +270,13 @@
   (let [fs (into [] (comp (map #(canonical g %)) (filter polynomial?) (distinct)) forms)
         g (reduce (fn [g f] (index-form g id f)) g fs)
         g (reduce (fn [g f]
-                    (if-let [c (unit-atom f)]
+                    (if-let [c (unit-atom (algebra-of g) f)]
                       (if (= (eg/find g c) (eg/find g id)) g (first (eg/union g c id)))
                       g))
                   g
                   fs)]
     (reduce (fn [g [p q]]
-              (if-let [[v value] (poly/linear-in-one-atom (poly/sub p q))]
+              (if-let [[v value] (poly/linear-in-one-atom (algebra-of g) (poly/sub (algebra-of g) p q))]
                 (let [[g vid] (if (bt/variable? v) (eg/add g v) [g v])
                       [g cid] (eg/add g value)]
                   (first (eg/union g vid cid)))
@@ -364,24 +370,24 @@
   is the class's value; one over unknowns is not, whatever its term
   count (the derivative's soak found a root worth 2x + 2 keeping
   e^-u · D(e^u), one term over two unknowns, and its parents with it)."
-  [a b]
+  [algebra a b]
   (let [c (compare (opaque-count a) (opaque-count b))]
     (cond (neg? c) a
           (pos? c) b
-          :else (poly/smaller a b))))
+          :else (poly/smaller algebra a b))))
 
 (defn- preferred
   "The form a class keeps of two polynomials: without a measure, the
   smaller under the built-in order; with one, the smaller key, shorter
   keys first and then lexicographic, so that any measure into vectors
   of naturals is well-founded, and ties go to the built-in order."
-  [prefer a b]
+  [algebra prefer a b]
   (if (nil? prefer)
-    (built-in-smaller a b)
+    (built-in-smaller algebra a b)
     (let [c (compare (measure-key prefer a) (measure-key prefer b))]
       (cond (neg? c) a
             (pos? c) b
-            :else (built-in-smaller a b)))))
+            :else (built-in-smaller algebra a b)))))
 
 ;; ---------------------------------------------------------------------------
 ;; the analysis
@@ -393,16 +399,18 @@
   which of two forms a class keeps (default: the built-in order,
   fewest terms first). :prefer is an experiment's knob (experiment 6)
   and not an option of `simplify`: what the simplifier guarantees
-  about results, it guarantees under the built-in order."
+  about results, it guarantees under the built-in order. :algebra,
+  the coefficient algebra (default bendix.algebra/rational)."
   ([] (poly-analysis {}))
-  ([{:keys [too-big prefer] :or {too-big 200}}]
+  ([{:keys [too-big prefer algebra] :or {too-big 200, algebra alg/rational}}]
    {:name :poly
     :too-big too-big
     :prefer prefer
+    :algebra algebra
     :make (fn [g node id]
             (cond
-              (bt/constant? node) (poly/constant node)
-              (bt/variable? node) (poly/variable node)
+              (bt/constant? node) (poly/constant algebra node)
+              (bt/variable? node) (poly/variable algebra node)
               (term/compound? node) (let [r (ring-op g node too-big)]
                                       (if (= ::opaque r) {:atom id} r))
               :else {:atom id}))
@@ -422,14 +430,14 @@
                  (or (= :conflict a) (= :conflict b)) :conflict
                  (and (atom? a) (atom? b)) (if (= (:atom a) (:atom b))
                                              a
-                                             (preferred prefer (poly/variable (:atom a)) (poly/variable (:atom b))))
+                                             (preferred algebra prefer (poly/variable algebra (:atom a)) (poly/variable algebra (:atom b))))
                  (atom? a) (if (or (not (polynomial? b)) (defines? g b (:atom a) too-big)) b a)
                  (atom? b) (if (or (not (polynomial? a)) (defines? g a (:atom b) too-big)) a b)
                  (or (= :too-big a) (= :too-big b)) :too-big
-                 :else (let [d (poly/sub a b)]
-                         (if (poly/constant? d)
+                 :else (let [d (poly/sub algebra a b)]
+                         (if (poly/constant? algebra d)
                            :conflict
-                           (preferred prefer a b))))))
+                           (preferred algebra prefer a b))))))
     :reconcile (fn [g id datas] (solve g id datas))
     ;; every class is indexed under its canonical form, an opaque class
     ;; under its own atom, so a class worth exactly sin x (sin x · 1) is
@@ -438,7 +446,7 @@
               (let [d (canonical g (eg/data g id :poly))
                     g (note-defined-variables g id d)
                     key (cond (polynomial? d) d
-                              (atom? d) (poly/variable (:atom d)))]
+                              (atom? d) (poly/variable algebra (:atom d)))]
                 (if key (index-form g id key) g)))}))
 
 (defn inconsistency

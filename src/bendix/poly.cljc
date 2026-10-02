@@ -1,5 +1,5 @@
 (ns bendix.poly
-  "Sparse multivariate polynomials over the exact rationals.
+  "Sparse multivariate polynomials over a coefficient algebra.
 
   A polynomial is a map from monomial to non-zero coefficient; a
   monomial is a map from atom to positive integer exponent. The zero
@@ -10,75 +10,100 @@
   and it is well-founded: below any polynomial there are only finitely
   many others, which is what lets an e-class analysis that keeps the
   smallest form converge.
-  Coefficient arithmetic is bendix.num's: bignums on the JVM and on
-  Jolt, exact within 2^53 in ClojureScript, where passing it throws.
+
+  Coefficients come from a bendix.algebra. Each function that touches
+  a coefficient takes the algebra as its first argument; the arities
+  without it use `bendix.algebra/rational`. Where an optional limit
+  exists, the algebra arity takes it explicitly (nil for none). A
+  polynomial does not carry its algebra; callers pass it consistently.
 
   Atoms are opaque here; bendix.term says what they mean (a
   variable, an e-class id, a placeholder). This namespace only orders
   them: keywords first, then integers, then anything else by its
   printed form. `map-atoms` renames them; `substitute` replaces them
   by polynomials."
-  (:require [bendix.num :as num]))
+  (:require [bendix.algebra :as alg]
+            [bendix.num :as num]))
 
 ;; ---------------------------------------------------------------------------
 ;; construction and arithmetic
 
 (def zero {})
 
-(defn constant [k] (if (zero? k) zero {{} k}))
+(defn constant
+  ([k] (constant alg/rational k))
+  ([algebra k] (if (alg/zero? algebra k) zero {{} k})))
 
-(defn variable [a] {{a 1} 1})
+(defn variable
+  ([v] (variable alg/rational v))
+  ([algebra v] {{v 1} (alg/one algebra)}))
 
 (defn constant-value
   "k if p is the constant k, else nil."
-  [p]
-  (cond
-    (empty? p) 0
-    (and (= 1 (count p)) (contains? p {})) (get p {})
-    :else nil))
+  ([p] (constant-value alg/rational p))
+  ([algebra p]
+   (cond
+     (empty? p) (alg/zero algebra)
+     (and (= 1 (count p)) (contains? p {})) (get p {})
+     :else nil)))
 
 (defn constant?
-  [p]
-  (some? (constant-value p)))
+  ([p] (constant? alg/rational p))
+  ([algebra p] (some? (constant-value algebra p))))
 
-(defn- add-term [p m c]
-  (let [c' (num/add (get p m 0) c)]
-    (if (zero? c') (dissoc p m) (assoc p m c'))))
+(defn- add-term [algebra p m c]
+  (let [c' (if-let [c0 (get p m)] (alg/add algebra c0 c) c)]
+    (if (alg/zero? algebra c') (dissoc p m) (assoc p m c'))))
 
-(defn add [p q]
-  (reduce-kv add-term p q))
+(defn add
+  ([p q] (add alg/rational p q))
+  ([algebra p q] (reduce-kv (fn [acc m c] (add-term algebra acc m c)) p q)))
 
-(defn scale [p k]
-  (if (zero? k)
-    zero
-    (reduce-kv (fn [acc m c] (assoc acc m (num/mul c k))) {} p)))
+(defn scale
+  ([p k] (scale alg/rational p k))
+  ([algebra p k]
+   (if (alg/zero? algebra k)
+     zero
+     ;; products can vanish when the algebra has zero divisors
+     (reduce-kv (fn [acc m c]
+                  (let [c' (alg/mul algebra c k)]
+                    (if (alg/zero? algebra c') acc (assoc acc m c'))))
+                {}
+                p))))
 
-(defn neg [p] (scale p -1))
+(defn neg
+  ([p] (neg alg/rational p))
+  ([algebra p] (scale algebra p (alg/neg algebra (alg/one algebra)))))
 
-(defn sub [p q] (add p (neg q)))
+(defn sub
+  ([p q] (sub alg/rational p q))
+  ([algebra p q] (add algebra p (neg algebra q))))
 
 (defn- mul-monomials [m1 m2] (merge-with + m1 m2))
 
-(defn mul [p q]
-  (reduce-kv (fn [acc m1 c1]
-               (reduce-kv (fn [acc m2 c2] (add-term acc (mul-monomials m1 m2) (num/mul c1 c2)))
-                          acc
-                          q))
-             zero
-             p))
+(defn mul
+  ([p q] (mul alg/rational p q))
+  ([algebra p q]
+   (reduce-kv (fn [acc m1 c1]
+                (reduce-kv (fn [acc m2 c2] (add-term algebra acc (mul-monomials m1 m2) (alg/mul algebra c1 c2)))
+                           acc
+                           q))
+              zero
+              p)))
 
 (defn expt
   "p to a non-negative integer power, by squaring. With a limit, nil
   as soon as any intermediate result has more terms than the limit."
-  ([p n] (expt p n nil))
-  ([p n limit]
+  ([p n] (expt alg/rational p n nil))
+  ([p n limit] (expt alg/rational p n limit))
+  ([algebra p n limit]
    (let [ok? (fn [q] (or (nil? limit) (<= (count q) limit)))]
-     (loop [acc (constant 1), base p, n n]
+     (loop [acc (constant algebra (alg/one algebra)), base p, n n]
        (cond
          (not (and (ok? acc) (ok? base))) nil
          (zero? n) acc
-         (odd? n) (recur (mul acc base) (if (= 1 n) base (mul base base)) (quot n 2))
-         :else (recur acc (mul base base) (quot n 2)))))))
+         (odd? n) (recur (mul algebra acc base) (if (= 1 n) base (mul algebra base base)) (quot n 2))
+         :else (recur acc (mul algebra base base) (quot n 2)))))))
 
 (defn reduce-square
   "p modulo a² − q: every a^e becomes a^(e mod 2)·q^(e div 2), so a
@@ -86,38 +111,44 @@
   intermediate result has more terms than the limit. This is
   reduction by the single-polynomial Gröbner basis {a² − q}; for
   q = 1 − c² it is the Pythagorean identity."
-  ([p a q] (reduce-square p a q nil))
-  ([p a q limit]
+  ([p v q] (reduce-square alg/rational p v q nil))
+  ([p v q limit] (reduce-square alg/rational p v q limit))
+  ([algebra p v q limit]
    (let [ok? (fn [r] (or (nil? limit) (<= (count r) limit)))]
      (reduce-kv (fn [acc m c]
                   (when acc
-                    (let [e (get m a 0)]
+                    (let [e (get m v 0)]
                       (if (< e 2)
-                        (add-term acc m c)
-                        (let [m' (if (odd? e) (assoc m a 1) (dissoc m a))
-                              qk (expt q (quot e 2) limit)
-                              acc' (when qk (add acc (scale (mul {m' 1} qk) c)))]
+                        (add-term algebra acc m c)
+                        (let [m' (if (odd? e) (assoc m v 1) (dissoc m v))
+                              qk (expt algebra q (quot e 2) limit)
+                              acc' (when qk (add algebra acc (scale algebra (mul algebra {m' (alg/one algebra)} qk) c)))]
                           (when (and acc' (ok? acc')) acc'))))))
                 zero
                 p))))
 
 (defn derivative
-  "∂p/∂a: the partial derivative of p with respect to the atom a,
-  every other atom held constant. Each monomial holding a^e becomes
-  the monomial with a^(e−1) and its coefficient times e; a polynomial
-  that does not mention a gives zero."
-  [p a]
-  (reduce-kv (fn [acc m c]
-               (let [e (get m a 0)]
-                 (if (zero? e)
-                   acc
-                   (add-term acc (if (= 1 e) (dissoc m a) (assoc m a (dec e))) (num/mul c e)))))
-             zero
-             p))
+  "∂p/∂v: the partial derivative of p with respect to the atom v,
+  every other atom held constant. Each monomial holding v^e becomes
+  the monomial with v^(e−1) and its coefficient times the image of e
+  in the algebra; a polynomial that does not mention v gives zero."
+  ([p v] (derivative alg/rational p v))
+  ([algebra p v]
+   (reduce-kv (fn [acc m c]
+                (let [e (get m v 0)]
+                  (if (zero? e)
+                    acc
+                    (add-term algebra acc (if (= 1 e) (dissoc m v) (assoc m v (dec e))) (alg/mul algebra c (alg/from-integer algebra e))))))
+              zero
+              p)))
 
-(defn sum [ps] (reduce add zero ps))
+(defn sum
+  ([ps] (sum alg/rational ps))
+  ([algebra ps] (reduce #(add algebra %1 %2) zero ps)))
 
-(defn product [ps] (reduce mul (constant 1) ps))
+(defn product
+  ([ps] (product alg/rational ps))
+  ([algebra ps] (reduce #(mul algebra %1 %2) (constant algebra (alg/one algebra)) ps)))
 
 (defn term-count [p] (count p))
 
@@ -134,132 +165,130 @@
 (defn map-atoms
   "p with every atom replaced by (f atom). Atoms that map to the same
   atom combine, as do terms that become equal."
-  [f p]
-  (reduce-kv (fn [acc m c]
-               (add-term acc (reduce-kv (fn [m' a e] (merge-with + m' {(f a) e})) {} m) c))
-             zero
-             p))
+  ([f p] (map-atoms alg/rational f p))
+  ([algebra f p]
+   (reduce-kv (fn [acc m c]
+                (add-term algebra acc (reduce-kv (fn [m' v e] (merge-with + m' {(f v) e})) {} m) c))
+              zero
+              p)))
 
 (defn substitute
   "p with every atom that subst maps replaced by the polynomial it
   maps to; other atoms stay. With a limit, nil as soon as an
   intermediate result has more terms than the limit."
-  ([p subst] (substitute p subst nil))
-  ([p subst limit]
+  ([p subst] (substitute alg/rational p subst nil))
+  ([p subst limit] (substitute alg/rational p subst limit))
+  ([algebra p subst limit]
    (let [ok? (fn [q] (or (nil? limit) (<= (count q) limit)))]
      (reduce-kv (fn [acc m c]
-                  (let [q (reduce-kv (fn [q a e]
-                                       (let [r (get subst a)
-                                             pe (if (nil? r) {{a e} 1} (expt r e limit))
-                                             q' (when pe (mul q pe))]
+                  (let [q (reduce-kv (fn [q v e]
+                                       (let [r (get subst v)
+                                             pe (if (nil? r) {{v e} (alg/one algebra)} (expt algebra r e limit))
+                                             q' (when pe (mul algebra q pe))]
                                          (if (and q' (ok? q')) q' (reduced nil))))
-                                     (constant 1)
+                                     (constant algebra (alg/one algebra))
                                      m)
-                        acc' (when q (add acc (scale q c)))]
+                        acc' (when q (add algebra acc (scale algebra q c)))]
                     (if (and acc' (ok? acc')) acc' (reduced nil))))
                 zero
                 p))))
 
 (defn evaluate
-  "The value of p under env, a map from atom to number."
-  [p env]
-  (reduce-kv (fn [acc m c]
-               (num/add acc (num/mul c (reduce-kv (fn [v a e] (num/mul v (num/expt (get env a) e)))
-                                                  1
-                                                  m))))
-             0
-             p))
+  "The value of p under env, a map from atom to coefficient."
+  ([p env] (evaluate alg/rational p env))
+  ([algebra p env]
+   (reduce-kv (fn [acc m c]
+                (alg/add algebra acc (alg/mul algebra c (reduce-kv (fn [x v e] (alg/mul algebra x (alg/pow algebra (get env v) e)))
+                                                   (alg/one algebra)
+                                                   m))))
+              (alg/zero algebra)
+              p)))
 
 ;; ---------------------------------------------------------------------------
 ;; ordering
 
-(defn- atom-key [a]
-  (cond (keyword? a) [0 (str a)]
-        (integer? a) [1 a]
-        :else [2 (pr-str a)]))
+(defn- atom-key [v]
+  (cond (keyword? v) [0 (str v)]
+        (integer? v) [1 v]
+        :else [2 (pr-str v)]))
 
 (defn- monomial-key
   "Graded lexicographic: higher total degree first, then the sorted
   atom/exponent list."
   [m]
   [(- (reduce + 0 (vals m)))
-   (vec (sort (map (fn [[a e]] [(atom-key a) (- e)]) m)))])
+   (vec (sort (map (fn [[v e]] [(atom-key v) (- e)]) m)))])
 
 (defn sorted-terms
   "The terms of p as [monomial coefficient] pairs in canonical order."
   [p]
   (sort-by (fn [[m _]] (monomial-key m)) compare p))
 
-(defn- coefficient-size
-  "|numerator| + denominator: a natural number, so that only finitely
-  many coefficients are smaller than any given one."
-  [c]
-  (if (num/ratio? c)
-    (num/add (num/abs (num/numerator c)) (num/denominator c))
-    (num/add (num/abs c) 1)))
-
-(defn- compare-coefficients [a b]
-  (let [c (compare (coefficient-size a) (coefficient-size b))]
-    (if (not= 0 c) c (num/cmp a b))))
+(defn- compare-coefficients [algebra x y]
+  (let [c (compare (alg/size algebra x) (alg/size algebra y))]
+    (if (not= 0 c) c (alg/cmp algebra x y))))
 
 (defn compare-polys
   "A total order: fewer terms first, then lower degree, then smaller
-  coefficients by size (|numerator| + denominator), then term by term
-  in canonical order comparing monomials, then coefficients by value.
-  Every component before the last is a natural number or a choice
-  among finitely many, so the order is well-founded: no infinite
-  descending chain exists, and a class that keeps the smallest form
-  it derives can only change finitely often."
-  [p q]
-  (let [c (compare (term-count p) (term-count q))]
-    (if (not= 0 c)
-      c
-      (let [c (compare (degree p) (degree q))]
-        (if (not= 0 c)
-          c
-          (let [c (compare (reduce num/add 0 (map coefficient-size (vals p)))
-                           (reduce num/add 0 (map coefficient-size (vals q))))]
-            (if (not= 0 c)
-              c
-              (loop [ps (sorted-terms p), qs (sorted-terms q)]
-                (if (empty? ps)
-                  0
-                  (let [[[mp cp] & ps] ps, [[mq cq] & qs] qs
-                        c (compare (monomial-key mp) (monomial-key mq))]
-                    (if (not= 0 c)
-                      c
-                      (let [c (compare-coefficients cp cq)]
-                        (if (not= 0 c) c (recur ps qs))))))))))))))
+  coefficients by the algebra's size, then term by term in canonical order comparing
+  monomials, then coefficients by the algebra's order. Every component
+  before the last is a natural number or a choice among finitely
+  many, so the order is well-founded: no infinite descending chain
+  exists, and a class that keeps the smallest form it derives can
+  only change finitely often."
+  ([p q] (compare-polys alg/rational p q))
+  ([algebra p q]
+   (let [c (compare (term-count p) (term-count q))]
+     (if (not= 0 c)
+       c
+       (let [c (compare (degree p) (degree q))]
+         (if (not= 0 c)
+           c
+           (let [c (compare (reduce num/add 0 (map #(alg/size algebra %) (vals p)))
+                            (reduce num/add 0 (map #(alg/size algebra %) (vals q))))]
+             (if (not= 0 c)
+               c
+               (loop [ps (sorted-terms p), qs (sorted-terms q)]
+                 (if (empty? ps)
+                   0
+                   (let [[[mp cp] & ps] ps, [[mq cq] & qs] qs
+                         c (compare (monomial-key mp) (monomial-key mq))]
+                     (if (not= 0 c)
+                       c
+                       (let [c (compare-coefficients algebra cp cq)]
+                         (if (not= 0 c) c (recur ps qs)))))))))))))))
 
 (defn linear-in-one-atom
-  "When p is α·v + β for one atom v and α ≠ 0, [v (- β/α)]: the value
-  of v that makes p zero. Otherwise nil."
-  [p]
-  (let [as (atoms p)]
-    (when (and (= 1 (count as)) (= 1 (degree p)))
-      (let [v (first as)
-            alpha (get p {v 1})
-            beta (get p {} 0)]
-        (when (and alpha (<= (count p) 2))
-          [v (num/neg (num/div beta alpha))])))))
+  "When p is α·v + β for one atom v and α a unit, [v (- β/α)]: the
+  value of v that makes p zero. Otherwise nil."
+  ([p] (linear-in-one-atom alg/rational p))
+  ([algebra p]
+   (let [as (atoms p)]
+     (when (and (= 1 (count as)) (= 1 (degree p)))
+       (let [v (first as)
+             alpha (get p {v 1})
+             beta (get p {} (alg/zero algebra))]
+         (when (and alpha (<= (count p) 2))
+           (when-let [x (alg/div algebra beta alpha)]
+             [v (alg/neg algebra x)])))))))
 
 (defn smaller
   "The smaller of p and q under `compare-polys`."
-  [p q]
-  (if (pos? (compare-polys p q)) q p))
+  ([p q] (smaller alg/rational p q))
+  ([algebra p q] (if (pos? (compare-polys algebra p q)) q p)))
 
 ;; ---------------------------------------------------------------------------
 ;; to and from terms
 
-(defn- factor-term [atom->term [a e]]
-  (let [t (atom->term a)]
+(defn- factor-term [atom->term [v e]]
+  (let [t (atom->term v)]
     (if (= 1 e) t [:expt t e])))
 
-(defn- monomial-term [atom->term m c]
-  (let [factors (mapv #(factor-term atom->term %) (sort-by (fn [[a _]] (atom-key a)) m))
-        factors (if (= 1 c) factors (into [c] factors))]
+(defn- monomial-term [algebra atom->term m c]
+  (let [factors (mapv #(factor-term atom->term %) (sort-by (fn [[v _]] (atom-key v)) m))
+        factors (if (= (alg/one algebra) c) factors (into [c] factors))]
     (case (count factors)
-      0 1
+      0 (alg/one algebra)
       1 (first factors)
       (into [:*] factors))))
 
@@ -267,10 +296,11 @@
   "The canonical term of p: a sum of products in canonical order,
   written with n-ary :+ and :*. atom->term renders an atom as a term
   (a keyword renders as itself)."
-  ([p] (->term p identity))
-  ([p atom->term]
-   (let [terms (mapv (fn [[m c]] (monomial-term atom->term m c)) (sorted-terms p))]
+  ([p] (->term alg/rational p identity))
+  ([p atom->term] (->term alg/rational p atom->term))
+  ([algebra p atom->term]
+   (let [terms (mapv (fn [[m c]] (monomial-term algebra atom->term m c)) (sorted-terms p))]
      (case (count terms)
-       0 0
+       0 (alg/zero algebra)
        1 (first terms)
        (into [:+] terms)))))

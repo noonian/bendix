@@ -700,6 +700,53 @@ decide equality of rational functions, or of anything under a radical
 or a transcendental function. It is the ring fragment, complete there
 and honest about its edges.
 
+### Coefficient algebras
+
+The analysis folds coefficients in ℚ, which is unsound for the
+time-and-space projects: three-registers and dirty-work compile over
+GF(2^w), where `x + x = 0`, and tree-evaluation's compiler wants the
+algebraic normal form of a Boolean circuit as this analysis
+(../../time-and-space/tree-evaluation/COMPILER.md, "Middle end").
+
+`bendix.algebra` makes the coefficient ring a parameter: the
+`Coefficients` protocol (ring operations, `from-integer`, a partial
+`inv`, and `size` and `cmp` for the well-founded order on forms) and
+`rational`, bendix.num's ℚ. Decided 2026-10-01:
+
+- **bendix owns the protocol.** symbolics is upstream of
+  time-and-space, so bendix does not depend on `catalytic.algebra`;
+  time-and-space adapts and tests bit-exact agreement.
+- **The algebra is an explicit argument.** Polynomials do not carry
+  it. Each coefficient-touching `bendix.poly` function takes it first,
+  with the existing ℚ arities unchanged (orrery depends on them); where
+  an optional limit exists, the algebra arity takes it explicitly, so
+  arities never collide. The polynomial analysis holds it as
+  `:algebra`. A dynamic binding was rejected: its extent is unclear
+  under saturation and laziness.
+- **Division is partial.** `:/` by a constant and negative constant
+  powers fold only for units; `linear-in-one-atom` solves only when
+  the atom's coefficient is a unit.
+- **`exp 0 = 1`, `log 1 = 0` fold over ℚ only.**
+
+Next, in this order:
+
+1. **GF(2) and GF(2^w) instances.** w ≤ 32 on every runtime; GF(2^64)
+   on the JVM and Jolt only, as in catalytic-buffer. Each algebra
+   reads and writes its own literals: in GF(2^w) an integer is a bit
+   pattern, as in three-registers; ratios are rejected.
+2. **Boolean atoms**, a set or predicate of atoms satisfying
+   `x² = x`, independent of the coefficients (three-registers: GF(2^64),
+   none; tree evaluation: GF(2), all). Over GF(2) with every atom
+   Boolean, the normal form is the ANF: canonical, so the analysis
+   decides circuit equality and exact degree. `derivative` rejects
+   Boolean atoms.
+3. **Boolean operators** in `ring-op` under Boolean atoms: `:and` as
+   `*`, `:xor` as `+`, `:not x` as `1 + x`, `:or x y` as `x + y + xy`.
+4. **Rule sets by algebra.** `trig`, `exp-log`, `powers` and
+   `derivative` are ℚ-only; elsewhere the default rule set is empty.
+   Oracle for GF(2) with Boolean atoms: tree-evaluation's
+   `treeval.compile.anf` on random circuits.
+
 ## 5. Conditions, soundness, and honest answers
 
 A merge is global and permanent within the value. Merging `[:/ :x :x]`
@@ -1512,3 +1559,12 @@ too-big, conflict) and a polynomial's normal form as a term in the
 native spelling with an opaque class written `#id`; and
 `bendix.core/serialize`, the egraph-serialize data of a graph with
 that class data and every node costed under `default-cost`.
+
+The coefficient seam (2026-10-01, section 4, "Coefficient
+algebras"): `bendix.algebra` (`Coefficients`, `rational`); every
+coefficient site in `bendix.poly` and `bendix.analysis` goes through
+it. No behaviour changed: the suite (77 tests, 430
+assertions) passes on the JVM and Jolt, the bench gives identical
+results on both (JVM 2802 ms before and 2807 ms after over every row,
+Jolt 4501 ms and 4615 ms), and `bendix.smoke`'s 25 facts hold in
+ClojureScript on Node.
