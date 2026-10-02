@@ -9,8 +9,9 @@
   function of the saturated e-graph that returns a cromulent cost
   function, so a plain cost f is `(constantly f)`), :dev? (check the
   normal forms after every rule application and throw naming the
-  rule), :too-big for the analysis (bendix.analysis/poly-analysis),
-  and the runner's limits.
+  rule), :too-big and :algebra for the analysis
+  (bendix.analysis/poly-analysis), and the runner's limits. The rule
+  sets that ship assume ℚ: under another :algebra, pass none.
 
   The costs that ship are `default-cost` and `no-D`. Under them and
   the rule sets that ship, equal spellings of a value reach one cost
@@ -23,7 +24,9 @@
   is `simplify` of [:D t x] under the derivative rules and `no-D`, a
   cost that counts what is still under a :D before size (IDEA.md
   section 3, \"Differentiation\")."
-  (:require [bendix.analysis :as an]
+  (:require [bendix.algebra :as alg]
+            [bendix.analysis :as an]
+            [bendix.num :as num]
             [bendix.poly :as poly]
             [bendix.rules :as rules]
             [bendix.term :as bt]
@@ -142,7 +145,7 @@
     (if-not (an/polynomial? d)
       g
       (let [best (ex/extractor g)
-            t (poly/->term d (fn [a] (if (bt/variable? a) a (:term (best a)))))
+            t (poly/->term (an/algebra-of g) d (fn [a] (if (bt/variable? a) a (:term (best a)))))
             [g nid] (eg/add g t)]
         (eg/rebuild (first (eg/union g nid id)))))))
 
@@ -158,7 +161,7 @@
                (let [d (an/canonical g (eg/data g r :poly))]
                  (if-not (an/polynomial? d)
                    g
-                   (let [[g nid] (eg/add g (poly/->term d render))]
+                   (let [[g nid] (eg/add g (poly/->term (an/algebra-of g) d render))]
                      (first (eg/union g nid r))))))
              g
              (eg/roots g)))))
@@ -175,7 +178,7 @@
         atom->term (fn [a] (cond (bt/variable? a) a
                                  (bt/placeholder? a) (bt/map-class-ids class-sym a)
                                  :else (class-sym a)))]
-    (cond (an/polynomial? d) {"type" "polynomial" "poly" (pr-str (poly/->term d atom->term))}
+    (cond (an/polynomial? d) {"type" "polynomial" "poly" (pr-str (poly/->term (an/algebra-of g) d atom->term))}
           (an/atom? d) {"type" "atom"}
           (keyword? d) {"type" (name d)}
           :else nil)))
@@ -192,12 +195,65 @@
 (def ^:private runner-keys
   [:iter-limit :node-limit :time-limit-ms :scheduler :match-limit :ban-length :timeline?])
 
+(defn- exponent-value
+  "The integer a closed exponent e denotes, computed in ℚ. Throws for
+  a variable, an operator outside the ring, or a non-integer result."
+  [e]
+  (letfn [(refuse [why] (throw (ex-info (str "an exponent over this algebra must be closed integer arithmetic: " why)
+                                        {:exponent e})))
+          (value [t]
+            (cond
+              (bt/constant? t) t
+              (bt/variable? t) (refuse "symbolic exponents are not supported yet")
+              (term/compound? t)
+              (let [op (term/operator t), vs (mapv value (term/children t))]
+                (case op
+                  :+ (reduce num/add 0 vs)
+                  :* (reduce num/mul 1 vs)
+                  :neg (if (= 1 (count vs)) (num/neg (vs 0)) (refuse ":neg takes one operand"))
+                  :- (case (count vs)
+                       1 (num/neg (vs 0))
+                       2 (num/sub (vs 0) (vs 1))
+                       (refuse ":- takes one or two operands"))
+                  :/ (cond (not= 2 (count vs)) (refuse ":/ takes two operands")
+                           (zero? (vs 1)) (refuse "division by zero")
+                           :else (num/div (vs 0) (vs 1)))
+                  :expt (let [[b n] vs]
+                          (cond (not= 2 (count vs)) (refuse ":expt takes two operands")
+                                (not (integer? n)) (refuse "a non-integer power")
+                                (not (neg? n)) (num/expt b n)
+                                (zero? b) (refuse "division by zero")
+                                :else (num/div 1 (num/expt b (- n)))))
+                  (refuse (str op " is not ring arithmetic"))))
+              :else (refuse "an unknown leaf")))]
+    (let [v (value e)]
+      (if (integer? v) v (refuse "the exponent is not an integer")))))
+
+(defn- integer-exponents
+  "t with every exponent evaluated to an integer literal. Over an
+  algebra other than ℚ an exponent is an integer and not an element:
+  in GF(2), 1 + 1 is 0 but x^(1+1) is x². Left in the e-graph, an
+  exponent's subterms would fold and merge as elements, and congruence
+  would then equate x^(1+1) with x⁰. A stopgap: symbolic exponents
+  are refused until they have a domain of their own (IDEA.md section
+  4, \"Exponents over other algebras\")."
+  [t]
+  (if (term/compound? t)
+    (let [kids (mapv integer-exponents (term/children t))]
+      (if (and (= :expt (term/operator t)) (= 2 (count kids)))
+        [:expt (kids 0) (exponent-value (term/child t 1))]
+        (term/make (term/operator t) kids)))
+    t))
+
 (defn saturate
   "Add t and run rules to saturation or a limit; the e-graph and the
-  root come back with the runner's result."
+  root come back with the runner's result. Over an :algebra other
+  than ℚ, every exponent in t must be closed integer arithmetic; it is
+  evaluated before t is added."
   ([t] (saturate t {}))
-  ([t {:keys [rules dev?] :or {rules []} :as opts}]
-   (let [g (egraph (select-keys opts [:too-big]))
+  ([t {:keys [rules dev? algebra] :or {rules []} :as opts}]
+   (let [g (egraph (select-keys opts [:too-big :algebra]))
+         t (if (or (nil? algebra) (identical? alg/rational algebra)) t (integer-exponents t))
          [g root] (eg/add g t)
          res (rw/embiggen g rules (cond-> (select-keys opts runner-keys)
                                     dev? (assoc :check an/inconsistency)))]

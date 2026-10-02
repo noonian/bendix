@@ -286,21 +286,22 @@
 
 (defn- monomial-term [algebra atom->term m c]
   (let [factors (mapv #(factor-term atom->term %) (sort-by (fn [[v _]] (atom-key v)) m))
-        factors (if (= (alg/one algebra) c) factors (into [c] factors))]
+        factors (if (= (alg/one algebra) c) factors (into [(alg/write-literal algebra c)] factors))]
     (case (count factors)
-      0 (alg/one algebra)
+      0 (alg/write-literal algebra (alg/one algebra))
       1 (first factors)
       (into [:*] factors))))
 
 (defn ->term
   "The canonical term of p: a sum of products in canonical order,
   written with n-ary :+ and :*. atom->term renders an atom as a term
-  (a keyword renders as itself)."
+  (a keyword renders as itself); a coefficient renders as the
+  algebra's literal."
   ([p] (->term alg/rational p identity))
   ([p atom->term] (->term alg/rational p atom->term))
   ([algebra p atom->term]
    (let [terms (mapv (fn [[m c]] (monomial-term algebra atom->term m c)) (sorted-terms p))]
      (case (count terms)
-       0 (alg/zero algebra)
+       0 (alg/write-literal algebra (alg/zero algebra))
        1 (first terms)
        (into [:+] terms)))))

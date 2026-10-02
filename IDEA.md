@@ -702,8 +702,8 @@ and honest about its edges.
 
 ### Coefficient algebras
 
-The analysis folds coefficients in ℚ, which is unsound for the
-time-and-space projects: three-registers and dirty-work compile over
+Folding coefficients in ℚ is unsound for the time-and-space
+projects: three-registers and dirty-work compile over
 GF(2^w), where `x + x = 0`, and tree-evaluation's compiler wants the
 algebraic normal form of a Boolean circuit as this analysis
 (../../time-and-space/tree-evaluation/COMPILER.md, "Middle end").
@@ -728,24 +728,99 @@ algebraic normal form of a Boolean circuit as this analysis
   the atom's coefficient is a unit.
 - **`exp 0 = 1`, `log 1 = 0` fold over ℚ only.**
 
+**The finite fields.** `(alg/gf2 w)` is GF(2^w) for w in 1..32 on
+every runtime, `(gf2 1)` being GF(2); `bendix.algebra64/gf2-64` is
+GF(2^64), JVM and Jolt only. Both are written as catalytic-buffer
+writes them and use its moduli: the default tail at each width is the
+smallest primitive one, which at 8, 16 and 32 is catalytic.algebra's
+0x1D, 0x2D and 0xAF, and GF(2^64) is catalytic.gf64's
+x⁶⁴ + x⁴ + x³ + x + 1 over signed longs. Literals belong to the
+algebra (`read-literal`, `write-literal`): in GF(2^w) an integer is a
+bit pattern, so `[:+ 3 5]` is 6, and a constant that is not an element
+(a ratio, 300 in GF(2^8)) makes an opaque class. `from-integer` is
+n·1, the parity of n, not its bit pattern. `simplify` takes
+`:algebra`.
+
+**Exponents are integers, not elements**, and bendix.core does not
+yet give them a domain of their own. Over an algebra other than ℚ,
+`saturate` evaluates every exponent to an integer literal before the
+term is added, and refuses a symbolic one; `:expt` reads its exponent
+from that literal. See *Exponents over other algebras* below.
+
 Next, in this order:
 
-1. **GF(2) and GF(2^w) instances.** w ≤ 32 on every runtime; GF(2^64)
-   on the JVM and Jolt only, as in catalytic-buffer. Each algebra
-   reads and writes its own literals: in GF(2^w) an integer is a bit
-   pattern, as in three-registers; ratios are rejected.
-2. **Boolean atoms**, a set or predicate of atoms satisfying
+1. **Boolean atoms**, a set or predicate of atoms satisfying
    `x² = x`, independent of the coefficients (three-registers: GF(2^64),
    none; tree evaluation: GF(2), all). Over GF(2) with every atom
    Boolean, the normal form is the ANF: canonical, so the analysis
    decides circuit equality and exact degree. `derivative` rejects
    Boolean atoms.
-3. **Boolean operators** in `ring-op` under Boolean atoms: `:and` as
+2. **Boolean operators** in `ring-op` under Boolean atoms: `:and` as
    `*`, `:xor` as `+`, `:not x` as `1 + x`, `:or x y` as `x + y + xy`.
-4. **Rule sets by algebra.** `trig`, `exp-log`, `powers` and
+3. **Rule sets by algebra.** `trig`, `exp-log`, `powers` and
    `derivative` are ℚ-only; elsewhere the default rule set is empty.
-   Oracle for GF(2) with Boolean atoms: tree-evaluation's
-   `treeval.compile.anf` on random circuits.
+   Until then a caller passing `:algebra` passes no rules. Oracle for
+   GF(2) with Boolean atoms: tree-evaluation's `treeval.compile.anf`
+   on random circuits.
+
+#### Exponents over other algebras
+
+An open problem. Over ℚ an exponent is a value like any other. Over
+GF(2^w) it is not: 1 + 1 is 0, but x^(1+1) is x². The e-graph shares
+one class per subterm, so an exponent's subterms fold and merge as
+elements: `[:+ :n 1 1 1]` merges with `[:+ :n 1]` in GF(2), and
+congruence then equates x^(n+3) with x^(n+1). Closed exponents
+(`[:+ 1 1]` merging with the literal 0) are the same failure. The
+stopgap above keeps this sound by refusing what it cannot place.
+
+**Why symbolic exponents are worth having.** The exponent domain
+depends on what the power is of:
+
+| power of | exponent domain |
+|---|---|
+| a formal polynomial | ℕ (ℤ with units) |
+| an atom ranging over GF(2^w), x^(2^w) = x | 0, or ℤ/(2^w − 1) |
+| a root of unity ω of order m | ℤ/m |
+
+- *Field equations.* Boolean atoms (x² = x) are the w = 1 case of
+  atoms ranging over the field; their exponents reduce the same way.
+- *Frobenius and addition chains.* x^(2^k) is GF(2)-linear, so a power
+  is a chain in which doubling the exponent is nearly free and adding
+  two costs a multiplication: Itoh–Tsujii inversion,
+  x^(2^w−2) in about log w multiplications; the AES S-box, inversion
+  in `(gf2 8 0x1B)` and an affine map, which masked implementations
+  (Rivain–Prouff, CHES 2010) compute with four multiplications. Ben-Or
+  and Cleve's cost has the same shape — linear operations cheap,
+  multiplication depth 4^d — which reopens ../../time-and-space/
+  three-registers' declined field inversion beside its `:sq`
+  primitive. Choosing the chain is an extraction over exponent terms.
+- *Roots of unity.* Σⱼ ω^(jk) is 1 when m divides k and 0 otherwise
+  (m odd, characteristic 2): the identity behind tree evaluation's
+  degree filter, derivable rather than only computed.
+
+**Options.**
+
+- *Two algebras in the analysis.* `:algebra` folds values; an
+  exponent algebra (a `Coefficients` instance: ℤ by default, later
+  ℤ/(2^w − 1) or ℤ/m) folds everything below an exponent position.
+  The leaves there are wrapped in a record (bendix.term, the one place
+  leaf meanings are read), variables as well as constants, so that no
+  exponent node is the node of a value; operators need no renaming,
+  since a node built over different leaves is a different node. The
+  exponent algebra reads and writes the wrapped literals, class data
+  marks which algebra a polynomial is in, and the index keys on
+  [algebra polynomial], since n as an exponent and n as a value are
+  the same polynomial. The wrappers come off at extraction.
+- *Domains in cromulent.* Classes carrying a domain, and union
+  refusing to cross one. The guard is available as a bendix analysis
+  whose merge rejects a mismatch, so this pays only with a second
+  client or with matching that sort conditions dominate.
+
+**Open questions.** The domain of an exponent's exponent (one wrapper
+level per nesting, or nested powers opaque); how a rule that builds
+exponent arithmetic (x^a · x^b → x^(a+b)) evaluates or wraps it; what
+to call the concept, since "sort" reads as ordering and "kind" is
+taken by class data ("domain" collides with nothing here).
 
 ## 5. Conditions, soundness, and honest answers
 

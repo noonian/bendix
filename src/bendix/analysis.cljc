@@ -1,9 +1,10 @@
 (ns bendix.analysis
   "E-class analyses for the CAS. The polynomial analysis is approach C
   of ../design/ac-problem.md: every class carries the normal form of
-  what it is worth as a polynomial over ℚ, and classes with the same
-  normal form are merged, so the commutative-ring identities never
-  run as rules.
+  what it is worth as a polynomial over its coefficient algebra (ℚ
+  unless :algebra says otherwise), and classes with the same normal
+  form are merged, so the commutative-ring identities never run as
+  rules.
 
   Data of a class under :poly is one of
 
@@ -175,9 +176,25 @@
       (and (= :log op) (= (poly/constant 1) d)) poly/zero
       :else ::opaque)))
 
+(defn- exponent
+  "The integer exponent the class c stands for, or nil. In ℚ it is the
+  class's value when that is an integer. In any other algebra an
+  exponent is an integer and not an element (in GF(2^w), 2 + 2 is 0
+  but x^(2+2) is x^4), so it is read from an integer literal among the
+  class's nodes, and bendix.core/saturate evaluates every exponent to
+  such a literal before the term is added. A literal shares its class
+  only with terms worth the same element, never with another literal,
+  and one that is not an element (2 in GF(2)) stays its own class."
+  [g algebra c d]
+  (if (identical? alg/rational algebra)
+    (let [e (poly/constant-value algebra d)]
+      (when (and e (integer? e)) e))
+    (some #(when (and (bt/constant? %) (integer? %)) %)
+          (:nodes (eg/eclass g (eg/find g c))))))
+
 (defn- ring-op
   "The polynomial of a compound node over its children's data, or
-  ::opaque when the operator is not a ring operation over ℚ, whatever
+  ::opaque when the operator is not a ring operation, whatever
   its children's data, or the node is one the ring cannot fold."
   [g node too-big]
   (let [op (term/operator node)]
@@ -202,10 +219,10 @@
                                   (= 2 n) (poly/sub algebra (nth ps 0) (nth ps 1))
                                   :else nil)
                          :expt (when (= 2 n)
-                                 (let [e (poly/constant-value algebra (nth ps 1))
+                                 (let [e (exponent g algebra (term/child node 1) (nth ps 1))
                                        k (poly/constant-value algebra (nth ps 0))]
                                    (cond
-                                     (not (and e (integer? e))) nil
+                                     (nil? e) nil
                                      (not (neg? e)) (or (poly/expt algebra (nth ps 0) e too-big) ::too-big)
                                      ;; a unit to a negative integer power is a constant
                                      k (some->> (alg/inv algebra (alg/pow algebra k (- e))) (poly/constant algebra))
@@ -409,7 +426,12 @@
     :algebra algebra
     :make (fn [g node id]
             (cond
-              (bt/constant? node) (poly/constant algebra node)
+              ;; a constant that is not a literal of the algebra (a
+              ;; ratio, or 300 in GF(2^8)) is opaque, as an exponent
+              ;; can still read it
+              (bt/constant? node) (if-some [c (alg/read-literal algebra node)]
+                                    (poly/constant algebra c)
+                                    {:atom id})
               (bt/variable? node) (poly/variable algebra node)
               (term/compound? node) (let [r (ring-op g node too-big)]
                                       (if (= ::opaque r) {:atom id} r))
