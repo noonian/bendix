@@ -9,9 +9,10 @@
   function of the saturated e-graph that returns a cromulent cost
   function, so a plain cost f is `(constantly f)`), :dev? (check the
   normal forms after every rule application and throw naming the
-  rule), :too-big and :algebra for the analysis
+  rule), :too-big, :algebra and :exponent-laws for the analysis
   (bendix.analysis/poly-analysis), and the runner's limits. The rule
-  sets that ship assume ℚ: under another :algebra, pass none.
+  sets that ship assume ℚ and free atoms: under another :algebra or
+  under :exponent-laws, pass none.
 
   The costs that ship are `default-cost` and `no-D`. Under them and
   the rule sets that ship, equal spellings of a value reach one cost
@@ -252,7 +253,7 @@
   evaluated before t is added."
   ([t] (saturate t {}))
   ([t {:keys [rules dev? algebra] :or {rules []} :as opts}]
-   (let [g (egraph (select-keys opts [:too-big :algebra]))
+   (let [g (egraph (select-keys opts [:too-big :algebra :exponent-laws]))
          t (if (or (nil? algebra) (identical? alg/rational algebra)) t (integer-exponents t))
          [g root] (eg/add g t)
          res (rw/embiggen g rules (cond-> (select-keys opts runner-keys)
@@ -300,11 +301,14 @@
   [:D t x] under `bendix.rules/derivative` together with the caller's
   :rules, extracted under `no-D`. The result adds :undifferentiated,
   the set of :D subterms no rule could remove, empty when the
-  derivative is complete."
+  derivative is complete. A variable with an exponent law is refused:
+  x² = x has no derivative."
   ([t x] (differentiate t x {}))
   ([t x opts]
    (when-not (bt/variable? x)
      (throw (ex-info "the variable of differentiation must be a variable" {:variable x})))
+   (when-let [law (when-let [laws (:exponent-laws opts)] (laws x))]
+     (throw (ex-info "the variable of differentiation has an exponent law" {:variable x :law law})))
    (let [rules (into [] (distinct) (concat rules/derivative (:rules opts)))
          res (simplify [:D t x] (assoc opts :rules rules :cost no-D))]
      (assoc res :undifferentiated (subterms-with :D (:result res))))))

@@ -4,7 +4,9 @@
   what it is worth as a polynomial over its coefficient algebra (ℚ
   unless :algebra says otherwise), and classes with the same normal
   form are merged, so the commutative-ring identities never run as
-  rules.
+  rules. Under :exponent-laws (bendix.exponent) the normal form is
+  that of the quotient by them, and the identities the laws add
+  (x² = x for a Boolean atom) never run as rules either.
 
   Data of a class under :poly is one of
 
@@ -62,6 +64,12 @@
   [g]
   (:algebra (the-analysis g)))
 
+(defn exponent-laws-of
+  "The exponent laws of g's polynomial analysis: a function from atom
+  to bendix.exponent law, or nil."
+  [g]
+  (:exponent-laws (the-analysis g)))
+
 ;; ---------------------------------------------------------------------------
 ;; canonical forms
 
@@ -93,7 +101,7 @@
 (defn- roots
   "p with every class-id atom replaced by its root."
   [g p]
-  (poly/map-atoms (algebra-of g) #(if (bt/variable? %) % (eg/find g %)) p))
+  (poly/map-atoms (algebra-of g) (exponent-laws-of g) #(if (bt/variable? %) % (eg/find g %)) p))
 
 (defn- substitutions
   "The substitution of every defined atom of p by its definition, as
@@ -119,7 +127,7 @@
     (cond
       (keyword? subst) subst
       (empty? subst) p
-      :else (or (poly/substitute (algebra-of g) p subst limit) ::too-big))))
+      :else (or (poly/substitute (algebra-of g) (exponent-laws-of g) p subst limit) ::too-big))))
 
 (defn canonical
   "d with every class-id atom replaced by its root in g, and every
@@ -139,7 +147,7 @@
       (cond
         (keyword? subst) :too-big
         (empty? subst) p
-        :else (or (poly/substitute (algebra-of g) p subst limit) :too-big)))
+        :else (or (poly/substitute (algebra-of g) (exponent-laws-of g) p subst limit) :too-big)))
     :else d))
 
 (defn- note-defined-variables
@@ -210,26 +218,26 @@
           (some #{:too-big} ds) :too-big
           :else
           (let [algebra (algebra-of g)
+                laws (exponent-laws-of g)
                 ps (mapv #(as-poly algebra %) ds)
                 result (case op
                          :+ (poly/sum algebra ps)
-                         :* (poly/product algebra ps)
+                         :* (poly/product algebra laws ps)
                          :neg (when (= 1 n) (poly/neg algebra (nth ps 0)))
                          :- (cond (= 1 n) (poly/neg algebra (nth ps 0))
                                   (= 2 n) (poly/sub algebra (nth ps 0) (nth ps 1))
                                   :else nil)
                          :expt (when (= 2 n)
-                                 (let [e (exponent g algebra (term/child node 1) (nth ps 1))
-                                       k (poly/constant-value algebra (nth ps 0))]
+                                 (let [e (exponent g algebra (term/child node 1) (nth ps 1))]
                                    (cond
                                      (nil? e) nil
-                                     (not (neg? e)) (or (poly/expt algebra (nth ps 0) e too-big) ::too-big)
-                                     ;; a unit to a negative integer power is a constant
-                                     k (some->> (alg/inv algebra (alg/pow algebra k (- e))) (poly/constant algebra))
-                                     :else nil)))
+                                     (not (neg? e)) (or (poly/expt algebra laws (nth ps 0) e too-big) ::too-big)
+                                     ;; a negative integer power of a unit: a constant, or
+                                     ;; a monomial over atoms whose laws make them units
+                                     :else (when-let [u (poly/inverse algebra laws (nth ps 0))]
+                                             (poly/expt algebra laws u (- e) too-big)))))
                          :/ (when (= 2 n)
-                              (let [k (poly/constant-value algebra (nth ps 1))]
-                                (some->> (when k (alg/inv algebra k)) (poly/scale algebra (nth ps 0)))))
+                              (some->> (poly/inverse algebra laws (nth ps 1)) (poly/mul algebra laws (nth ps 0))))
                          nil)]
             (cond
               (nil? result) ::opaque
@@ -417,13 +425,18 @@
   fewest terms first). :prefer is an experiment's knob (experiment 6)
   and not an option of `simplify`: what the simplifier guarantees
   about results, it guarantees under the built-in order. :algebra,
-  the coefficient algebra (default bendix.algebra/rational)."
+  the coefficient algebra (default bendix.algebra/rational).
+  :exponent-laws, a function from atom to bendix.exponent law (default
+  nil: every atom is free); it is asked about variables and about the
+  ids of opaque classes, so a map from variable to law leaves every
+  opaque class free and `(constantly law)` gives every value the law."
   ([] (poly-analysis {}))
-  ([{:keys [too-big prefer algebra] :or {too-big 200, algebra alg/rational}}]
+  ([{:keys [too-big prefer algebra exponent-laws] :or {too-big 200, algebra alg/rational}}]
    {:name :poly
     :too-big too-big
     :prefer prefer
     :algebra algebra
+    :exponent-laws exponent-laws
     :make (fn [g node id]
             (cond
               ;; a constant that is not a literal of the algebra (a

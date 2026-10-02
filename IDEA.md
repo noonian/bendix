@@ -741,49 +741,76 @@ bit pattern, so `[:+ 3 5]` is 6, and a constant that is not an element
 n·1, the parity of n, not its bit pattern. `simplify` takes
 `:algebra`.
 
-**Exponents are integers, not elements**, and bendix.core does not
-yet give them a domain of their own. Over an algebra other than ℚ,
-`saturate` evaluates every exponent to an integer literal before the
-term is added, and refuses a symbolic one; `:expt` reads its exponent
-from that literal. See *Exponents over other algebras* below.
+**Exponents are integers, not elements.** Over an algebra other than
+ℚ, `saturate` evaluates every exponent to an integer literal before
+the term is added, and refuses a symbolic one; `:expt` reads its
+exponent from that literal. Which integers are equal as exponents of
+an atom is the atom's law; see *Exponents over other algebras* below.
 
 Next, in this order:
 
-1. **Boolean atoms**, a set or predicate of atoms satisfying
-   `x² = x`, independent of the coefficients (three-registers: GF(2^64),
-   none; tree evaluation: GF(2), all). Over GF(2) with every atom
-   Boolean, the normal form is the ANF: canonical, so the analysis
-   decides circuit equality and exact degree. `derivative` rejects
-   Boolean atoms.
-2. **Boolean operators** in `ring-op` under Boolean atoms: `:and` as
+1. **Boolean operators** in `ring-op` under Boolean atoms: `:and` as
    `*`, `:xor` as `+`, `:not x` as `1 + x`, `:or x y` as `x + y + xy`.
-3. **Rule sets by algebra.** `trig`, `exp-log`, `powers` and
-   `derivative` are ℚ-only; elsewhere the default rule set is empty.
-   Until then a caller passing `:algebra` passes no rules. Oracle for
-   GF(2) with Boolean atoms: tree-evaluation's `treeval.compile.anf`
-   on random circuits.
+2. **Rule sets by algebra.** `trig`, `exp-log`, `powers` and
+   `derivative` are ℚ-only and assume free atoms; elsewhere the
+   default rule set is empty. Until then a caller passing `:algebra`
+   or `:exponent-laws` passes no rules. A second oracle for GF(2) with
+   Boolean atoms, beside the truth tables of the suite:
+   tree-evaluation's `treeval.compile.anf` on random circuits.
 
 #### Exponents over other algebras
 
-An open problem. Over ℚ an exponent is a value like any other. Over
-GF(2^w) it is not: 1 + 1 is 0, but x^(1+1) is x². The e-graph shares
-one class per subterm, so an exponent's subterms fold and merge as
-elements: `[:+ :n 1 1 1]` merges with `[:+ :n 1]` in GF(2), and
-congruence then equates x^(n+3) with x^(n+1). Closed exponents
-(`[:+ 1 1]` merging with the literal 0) are the same failure. The
-stopgap above keeps this sound by refusing what it cannot place.
+Over ℚ an exponent is a value like any other. Over GF(2^w) it is not:
+1 + 1 is 0, but x^(1+1) is x². An exponent counts factors, so it
+lives in the monoid its base generates, and a monoid with one
+generator is ℕ with n and n + p identified from n = r on. That pair,
+an index r and a period p, is the atom's **law**:
 
-**Why symbolic exponents are worth having.** The exponent domain
-depends on what the power is of:
+| power of | law `[r p]` | exponents |
+|---|---|---|
+| a formal indeterminate | none | ℕ |
+| a Boolean atom, x² = x | `[1 1]` | 0, 1 |
+| an atom ranging over GF(q), x^q = x | `[1 (q − 1)]` | 0, then the cycle 1 … q − 1 |
+| a root of unity of order m | `[0 m]` | ℤ/m, negative exponents included |
 
-| power of | exponent domain |
-|---|---|
-| a formal polynomial | ℕ (ℤ with units) |
-| an atom ranging over GF(2^w), x^(2^w) = x | 0, or ℤ/(2^w − 1) |
-| a root of unity ω of order m | ℤ/m |
+**Closed exponents: laws.** `:exponent-laws`, an option of the
+analysis and of `simplify`, is a function from atom to
+`bendix.exponent` law, nil meaning every atom is free. It is the caller's and independent of the
+coefficients: three-registers computes with formal polynomials over
+GF(2^64) and passes none; tree evaluation is GF(2) with every atom
+Boolean. `bendix.poly` takes the laws after the algebra and keeps
+every exponent canonical under them wherever monomials multiply, so a
+polynomial is the normal form of the quotient ring and the analysis
+merges by it as before; no rule runs.
 
-- *Field equations.* Boolean atoms (x² = x) are the w = 1 case of
-  atoms ranging over the field; their exponents reduce the same way.
+- Over GF(2) with every atom Boolean the normal form is the algebraic
+  normal form: canonical, so the analysis decides circuit equality
+  and exact degree. Over GF(q) with every atom a field element it
+  decides equality of functions GF(q)ⁿ → GF(q) the same way.
+- Index 1 keeps x⁰ out of the cycle. x^(q−1) is 1 everywhere but at 0,
+  the indicator of x ≠ 0, so reducing exponents mod q − 1 is wrong
+  exactly at 0. For q = 2^w the monoid is the w-bit words under ones'
+  complement addition, its two zeros being those two exponents. A
+  zero test is therefore a power: 1 + x^(q−1).
+- Index 0 makes the atom a unit: its negative powers fold, and `:/`
+  by a monomial of units is a ring operation.
+- The law is asked about variables and about the ids of opaque
+  classes: a map from variable to law leaves `[:f :x]` free, and
+  `(constantly law)` says every value obeys it.
+- `differentiate` refuses a variable with a law: x² = x has no
+  derivative.
+- A law is not every relation an atom can satisfy. A primitive root
+  of unity also has 1 + ω + … + ω^(m−1) = 0, a reduction of the kind
+  `reduce-square` performs and not an exponent law. With the law
+  alone, Σⱼ ω^(jk) folds to 1 when m divides k (m odd,
+  characteristic 2) and stays a sum otherwise.
+
+**Symbolic exponents: open.** The e-graph shares one class per
+subterm, so an exponent's subterms fold and merge as elements:
+`[:+ :n 1 1 1]` merges with `[:+ :n 1]` in GF(2), and congruence then
+equates x^(n+3) with x^(n+1). `saturate` keeps this sound by refusing
+a symbolic exponent. Why they are worth having:
+
 - *Frobenius and addition chains.* x^(2^k) is GF(2)-linear, so a power
   is a chain in which doubling the exponent is nearly free and adding
   two costs a multiplication: Itoh–Tsujii inversion,
@@ -796,10 +823,25 @@ depends on what the power is of:
   primitive. Choosing the chain is an extraction over exponent terms.
 - *Roots of unity.* Σⱼ ω^(jk) is 1 when m divides k and 0 otherwise
   (m odd, characteristic 2): the identity behind tree evaluation's
-  degree filter, derivable rather than only computed.
+  degree filter, derivable for a symbolic k rather than only computed
+  (with the relation above for the vanishing half).
 
 **Options.**
 
+- *Forms in the monomial.* The exponent of an atom becomes a
+  ℤ-linear form (n + 3), held in the monomial map and added where
+  monomials multiply; the exponent subterm is read as syntax and never
+  becomes a class. No change to the core. No rule fires inside an
+  exponent, and none is needed while forms are linear. Under a law of
+  index 1 or more a form reduces only where its sign is known: for a
+  Boolean x, x^(n+1) is x and x^n is undetermined.
+- *Two congruences over one term store.* Every identity of ℤ[…] holds
+  in every commutative ring, so the base relation is ℤ and each
+  algebra is a coarsening of it: a colored e-graph (Singher and
+  Itzhaky, arXiv:2305.19203). `:expt` reads its exponent's class in
+  the base relation; a literal is read per relation (`[:+ 3 5]` is 6
+  in GF(8) and 8 in the base); the coarsening is `from-integer`, so
+  n·x^(n−1) holds n once, used both ways. A change to cromulent.
 - *Two algebras in the analysis.* `:algebra` folds values; an
   exponent algebra (a `Coefficients` instance: ℤ by default, later
   ℤ/(2^w − 1) or ℤ/m) folds everything below an exponent position.
@@ -817,8 +859,11 @@ depends on what the power is of:
   client or with matching that sort conditions dominate.
 
 **Open questions.** The domain of an exponent's exponent (one wrapper
-level per nesting, or nested powers opaque); how a rule that builds
-exponent arithmetic (x^a · x^b → x^(a+b)) evaluates or wraps it; what
+level per nesting, or nested powers opaque; the exponents of an
+exponent in ℤ/m eventually repeat with a period dividing λ(m),
+Carmichael's function, so a tower has finitely many domains: 255, 16,
+4, 2, 1 for GF(2^8)); how a rule that builds exponent arithmetic
+(x^a · x^b → x^(a+b)) evaluates or wraps it; what
 to call the concept, since "sort" reads as ordering and "kind" is
 taken by class data ("domain" collides with nothing here).
 

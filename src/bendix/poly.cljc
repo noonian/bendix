@@ -17,12 +17,22 @@
   exists, the algebra arity takes it explicitly (nil for none). A
   polynomial does not carry its algebra; callers pass it consistently.
 
+  Exponents come from the atoms. `laws`, a function from atom to
+  bendix.exponent law (nil: every atom is free), says which powers of
+  an atom are equal, and each function that multiplies monomials takes
+  it after the algebra and keeps every exponent canonical under it:
+  with x idempotent, x · x is x. Under laws a polynomial is the normal
+  form of an element of the quotient by them. The arities without laws
+  are the free polynomial ring; `derivative` and `reduce-square` have
+  no other.
+
   Atoms are opaque here; bendix.term says what they mean (a
   variable, an e-class id, a placeholder). This namespace only orders
   them: keywords first, then integers, then anything else by its
   printed form. `map-atoms` renames them; `substitute` replaces them
   by polynomials."
   (:require [bendix.algebra :as alg]
+            [bendix.exponent :as ex]
             [bendix.num :as num]))
 
 ;; ---------------------------------------------------------------------------
@@ -79,13 +89,24 @@
   ([p q] (sub alg/rational p q))
   ([algebra p q] (add algebra p (neg algebra q))))
 
-(defn- mul-monomials [m1 m2] (merge-with + m1 m2))
+(defn- times-power
+  "The monomial m times v^e, the exponent of v canonical under its
+  law; v drops out when that exponent is 0."
+  [laws m v e]
+  (let [e' (ex/normalize (when laws (laws v)) (+ (get m v 0) e))]
+    (if (zero? e') (dissoc m v) (assoc m v e'))))
+
+(defn- mul-monomials [laws m1 m2]
+  (if (nil? laws)
+    (merge-with + m1 m2)
+    (reduce-kv (fn [m v e] (times-power laws m v e)) m1 m2)))
 
 (defn mul
-  ([p q] (mul alg/rational p q))
-  ([algebra p q]
+  ([p q] (mul alg/rational nil p q))
+  ([algebra p q] (mul algebra nil p q))
+  ([algebra laws p q]
    (reduce-kv (fn [acc m1 c1]
-                (reduce-kv (fn [acc m2 c2] (add-term algebra acc (mul-monomials m1 m2) (alg/mul algebra c1 c2)))
+                (reduce-kv (fn [acc m2 c2] (add-term algebra acc (mul-monomials laws m1 m2) (alg/mul algebra c1 c2)))
                            acc
                            q))
               zero
@@ -94,16 +115,30 @@
 (defn expt
   "p to a non-negative integer power, by squaring. With a limit, nil
   as soon as any intermediate result has more terms than the limit."
-  ([p n] (expt alg/rational p n nil))
-  ([p n limit] (expt alg/rational p n limit))
-  ([algebra p n limit]
+  ([p n] (expt alg/rational nil p n nil))
+  ([p n limit] (expt alg/rational nil p n limit))
+  ([algebra p n limit] (expt algebra nil p n limit))
+  ([algebra laws p n limit]
    (let [ok? (fn [q] (or (nil? limit) (<= (count q) limit)))]
      (loop [acc (constant algebra (alg/one algebra)), base p, n n]
        (cond
          (not (and (ok? acc) (ok? base))) nil
          (zero? n) acc
-         (odd? n) (recur (mul algebra acc base) (if (= 1 n) base (mul algebra base base)) (quot n 2))
-         :else (recur acc (mul algebra base base) (quot n 2)))))))
+         (odd? n) (recur (mul algebra laws acc base) (if (= 1 n) base (mul algebra laws base base)) (quot n 2))
+         :else (recur acc (mul algebra laws base base) (quot n 2)))))))
+
+(defn inverse
+  "p⁻¹ when p is a unit the algebra and the laws can see: one term
+  whose coefficient is a unit and whose atoms are all units (laws of
+  index 0), v^e becoming v^(period − e). nil otherwise; without laws,
+  for anything but a unit constant."
+  ([algebra p] (inverse algebra nil p))
+  ([algebra laws p]
+   (when (= 1 (count p))
+     (let [[m c] (first p)
+           c' (alg/inv algebra c)]
+       (when (and c' (every? #(ex/unit? (when laws (laws %))) (keys m)))
+         {(reduce-kv (fn [m' v e] (times-power laws m' v (- e))) {} m) c'})))))
 
 (defn reduce-square
   "p modulo a² − q: every a^e becomes a^(e mod 2)·q^(e div 2), so a
@@ -131,7 +166,9 @@
   "∂p/∂v: the partial derivative of p with respect to the atom v,
   every other atom held constant. Each monomial holding v^e becomes
   the monomial with v^(e−1) and its coefficient times the image of e
-  in the algebra; a polynomial that does not mention v gives zero."
+  in the algebra; a polynomial that does not mention v gives zero.
+  Formal: an atom with a law has no derivative (x² = x would make
+  2x = 1)."
   ([p v] (derivative alg/rational p v))
   ([algebra p v]
    (reduce-kv (fn [acc m c]
@@ -147,8 +184,9 @@
   ([algebra ps] (reduce #(add algebra %1 %2) zero ps)))
 
 (defn product
-  ([ps] (product alg/rational ps))
-  ([algebra ps] (reduce #(mul algebra %1 %2) (constant algebra (alg/one algebra)) ps)))
+  ([ps] (product alg/rational nil ps))
+  ([algebra ps] (product algebra nil ps))
+  ([algebra laws ps] (reduce #(mul algebra laws %1 %2) (constant algebra (alg/one algebra)) ps)))
 
 (defn term-count [p] (count p))
 
@@ -165,26 +203,34 @@
 (defn map-atoms
   "p with every atom replaced by (f atom). Atoms that map to the same
   atom combine, as do terms that become equal."
-  ([f p] (map-atoms alg/rational f p))
-  ([algebra f p]
+  ([f p] (map-atoms alg/rational nil f p))
+  ([algebra f p] (map-atoms algebra nil f p))
+  ([algebra laws f p]
    (reduce-kv (fn [acc m c]
-                (add-term algebra acc (reduce-kv (fn [m' v e] (merge-with + m' {(f v) e})) {} m) c))
+                (add-term algebra acc (reduce-kv (fn [m' v e] (mul-monomials laws m' {(f v) e})) {} m) c))
               zero
               p)))
+
+(defn under
+  "The free polynomial p under the laws: every exponent made
+  canonical, terms that become equal combined."
+  [algebra laws p]
+  (map-atoms algebra laws identity p))
 
 (defn substitute
   "p with every atom that subst maps replaced by the polynomial it
   maps to; other atoms stay. With a limit, nil as soon as an
   intermediate result has more terms than the limit."
-  ([p subst] (substitute alg/rational p subst nil))
-  ([p subst limit] (substitute alg/rational p subst limit))
-  ([algebra p subst limit]
+  ([p subst] (substitute alg/rational nil p subst nil))
+  ([p subst limit] (substitute alg/rational nil p subst limit))
+  ([algebra p subst limit] (substitute algebra nil p subst limit))
+  ([algebra laws p subst limit]
    (let [ok? (fn [q] (or (nil? limit) (<= (count q) limit)))]
      (reduce-kv (fn [acc m c]
                   (let [q (reduce-kv (fn [q v e]
                                        (let [r (get subst v)
-                                             pe (if (nil? r) {{v e} (alg/one algebra)} (expt algebra r e limit))
-                                             q' (when pe (mul algebra q pe))]
+                                             pe (if (nil? r) {{v e} (alg/one algebra)} (expt algebra laws r e limit))
+                                             q' (when pe (mul algebra laws q pe))]
                                          (if (and q' (ok? q')) q' (reduced nil))))
                                      (constant algebra (alg/one algebra))
                                      m)

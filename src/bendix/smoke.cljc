@@ -6,7 +6,9 @@
   id and never a tied term (cromulent.smoke says why). `checks` is
   plain data: bendix.smoke-test asserts it under clojure.test, and
   orrery's node build and browser self-test run it."
-  (:require [bendix.core :as bx :refer [simplify differentiate]]
+  (:require [bendix.algebra :as alg]
+            [bendix.core :as bx :refer [simplify differentiate]]
+            [bendix.exponent :as ex]
             [bendix.num :as num]
             [bendix.rules :as rules]
             [cromulent.core :as eg]
@@ -78,4 +80,13 @@
             [:+ [:* :x [:cos :x]] [:sin :x]] (:result (differentiate [:* :x [:sin :x]] :x)))
      (check "no rule for abs: the derivative stays and says so"
             #{[:D [:abs :x] :x]} (:undifferentiated (differentiate [:* :x [:abs :x]] :x)))
-     (check "a rational exponent" [:* half [:expt :x (num/div -1 2)]] (:result (differentiate [:expt :x half] :x)))]))
+     (check "a rational exponent" [:* half [:expt :x (num/div -1 2)]] (:result (differentiate [:expt :x half] :x)))
+     (check "a Boolean atom over GF(2): x·x is x"
+            :x (result [:* :x :x] {:algebra (alg/gf2 1) :exponent-laws (constantly ex/idempotent)}))
+     (check "x or y in algebraic normal form"
+            [:+ [:* :x :y] :x :y]
+            (result [:+ [:* [:+ :x 1] [:+ :y 1]] 1] {:algebra (alg/gf2 1) :exponent-laws (constantly ex/idempotent)}))
+     (check "an atom ranging over GF(4): x⁴ is x"
+            :x (result [:expt :x 4] {:algebra (alg/gf2 2) :exponent-laws (constantly (ex/field-element 4))}))
+     (check "a cube root of unity: w⁻² is w"
+            :w (result [:expt :w -2] {:algebra (alg/gf2 2) :exponent-laws {:w (ex/root-of-unity 3)}}))]))
