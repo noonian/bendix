@@ -754,9 +754,7 @@ Next, in this order:
 2. **Rule sets by algebra.** `trig`, `exp-log`, `powers` and
    `derivative` are ℚ-only and assume free atoms; elsewhere the
    default rule set is empty. Until then a caller passing `:algebra`
-   or `:exponent-laws` passes no rules. A second oracle for GF(2) with
-   Boolean atoms, beside the truth tables of the suite:
-   tree-evaluation's `treeval.compile.anf` on random circuits.
+   or `:exponent-laws` passes no rules.
 
 #### Exponents over other algebras
 
@@ -775,18 +773,22 @@ an index r and a period p, is the atom's **law**:
 
 **Closed exponents: laws.** `:exponent-laws`, an option of the
 analysis and of `simplify`, is a function from atom to
-`bendix.exponent` law, nil meaning every atom is free. It is the caller's and independent of the
-coefficients: three-registers computes with formal polynomials over
-GF(2^64) and passes none; tree evaluation is GF(2) with every atom
-Boolean. `bendix.poly` takes the laws after the algebra and keeps
-every exponent canonical under them wherever monomials multiply, so a
-polynomial is the normal form of the quotient ring and the analysis
-merges by it as before; no rule runs.
+`bendix.exponent` law, nil meaning every atom is free. It is the
+caller's and independent of the coefficients: tree evaluation is GF(2)
+with every atom Boolean, while three-registers' variables hold
+elements of GF(2^w), so a field-element law is sound there, worth
+passing at small w and vacuous at 64. `bendix.poly` takes the laws
+after the algebra and keeps every exponent canonical under them
+wherever monomials multiply, so a polynomial is the normal form of the
+quotient ring and the analysis merges by it as before; no rule runs.
 
 - Over GF(2) with every atom Boolean the normal form is the algebraic
   normal form: canonical, so the analysis decides circuit equality
-  and exact degree. Over GF(q) with every atom a field element it
-  decides equality of functions GF(q)ⁿ → GF(q) the same way.
+  and exact degree. ../../time-and-space/tree-evaluation checks its
+  own ANF arithmetic against this on random circuits
+  (`treeval.bendix-test`), and against free atoms without the law.
+  Over GF(q) with every atom a field element it decides equality of
+  functions GF(q)ⁿ → GF(q) the same way.
 - Index 1 keeps x⁰ out of the cycle. x^(q−1) is 1 everywhere but at 0,
   the indicator of x ≠ 0, so reducing exponents mod q − 1 is wrong
   exactly at 0. For q = 2^w the monoid is the w-bit words under ones'

@@ -198,7 +198,7 @@
     (let [e (poly/constant-value algebra d)]
       (when (and e (integer? e)) e))
     (some #(when (and (bt/constant? %) (integer? %)) %)
-          (:nodes (eg/eclass g (eg/find g c))))))
+          (eg/nodes g c))))
 
 (defn- ring-op
   "The polynomial of a compound node over its children's data, or
@@ -257,7 +257,7 @@
     (into #{}
           (comp (map #(canonical g %)) (filter polynomial?))
           (cons (eg/data g r :poly)
-                (map #(make g (eg/canonicalize g %) r) (:nodes (eg/eclass g r)))))))
+                (map #(make g (eg/canonicalize g %) r) (eg/nodes g r))))))
 
 (defn- unit-atom
   "The class id c when the polynomial d is c to the first power with
