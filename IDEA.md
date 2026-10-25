@@ -1266,17 +1266,19 @@ analysis is not something that has shipped elsewhere.
   for it is a reference differentiator whose result must land in the
   same class.
 - Results that tie can differ as terms. Canonical means the cost
-  (section 6), and a tie goes to cromulent's node order, which
-  follows the order of insertion: under `powers`
-  `[:* :a [:expt :y [:+ :n :m 1]]]` comes back as itself and
-  `[:* :a :y [:expt :y [:+ :n :m]]]` as
-  `[:* :a [:expt :y [:+ :m :n 1]]]`, and under `exp-log`
-  `[:exp [:+ :x 1]]` and `[:* [:exp 1] [:exp :x]]` differ the same
-  way. Every system we read orders the arguments of a sum and a
-  product, so by section 6's precedence the answer should be one
-  term, and the open part is how: a tie broken by a total order on
-  the terms the nodes head (`bendix.poly` has one for forms), which
-  cromulent's extractor does not see today.
+  (section 6). cromulent's extractor now breaks a tie by the terms
+  the nodes head (`compare-nodes`), not by insertion order, and that
+  settled the `powers` case: `[:* :a [:expt :y [:+ :n :m 1]]]` and
+  `[:* :a :y [:expt :y [:+ :n :m]]]` both come back as
+  `[:* :a [:expt :y [:+ :m :n 1]]]`. Under `exp-log`,
+  `[:exp [:+ :x 1]]` and `[:* [:exp 1] [:exp :x]]` still differ
+  (`x + 1` against `1 + x`, checked 2026-10-23): the two runs hold
+  different spellings of the argument's sum, and the tie is broken
+  only among the nodes a class holds. Every system we read orders
+  the arguments of a sum and a product, so by section 6's precedence
+  the answer should be one term; the open part is whether to
+  materialize the canonical spelling of every sum, or to order a
+  tie by the form (`bendix.poly` has a total order on forms).
 
 ## Appendix: term format trade-offs
 
@@ -1384,309 +1386,57 @@ built normal-form rules, `pythagoras`, the term seam in the rules,
 
 ## Status
 
-Milestone 1 implemented 2026-09-13, tests green on JVM (Clojure 1.12)
-and Jolt v0.8.7 through `clojure -M:test` and `jolt -M:test` /
-`jolt test`, cromulent as a `:local/root` dependency:
+What exists now. How each piece was built, and the defects found on
+the way, are in the git history; what they taught is in the sections
+above.
 
-- `bendix.poly` — sparse multivariate polynomials over ℚ as plain
-  maps: arithmetic (promoting to bignums), `expt` by squaring with a
-  term-count limit, atom renaming, evaluation, a total order, and
-  rendering to canonical n-ary `:+`/`:*`/`:expt` terms.
-- `bendix.analysis` — the polynomial analysis of section 4 exactly as
-  ../design/ac-problem.md approach C specifies, with the "atoms move"
-  hard part resolved (ids canonicalized at every use, recompute in
-  the core, a well-founded order on forms); the index from normal form to
-  class in the analysis state; `inconsistency`, the dev-mode oracle.
-- `bendix.core` — `simplify` and `saturate`: add, run rules under the
-  analysis, materialize every class's normal form, extract under
-  `default-cost`. No rules ship yet; the analysis alone collects like
-  terms, folds constants, cancels, expands when that is smaller and
-  keeps the factored form when it is not.
-- Tests (23 tests, 106 assertions): polynomial arithmetic is a ring
-  homomorphism under evaluation at random rational points, rendered
-  terms evaluate to their polynomial, the order is total and
-  compares coefficients by size, linear equations in one atom are
-  recognized; like terms,
-  cancellation, four spellings of a + b + c in one class with only the
-  nodes that were written, opaque atoms, atoms moving under a union,
-  `:too-big`, `:conflict`, assumptions settling on the smaller form,
-  determining equations solved (a = a/2 and a = −a give a = 0, a = 2a + 1
-  gives a = −1, x = y + 1 stays an assumption); experiment 3 (the
-  oracle names the wrong rule);
-  invariants hold with the analysis on random scripts; every
-  arrangement of a sum is one class; `simplify` preserves value at
-  random rational points, never grows a term, and its cost is a
-  fixpoint; the graph behind it is well-formed.
-- `bench/` — experiment 2 (table in ../design/ac-problem.md) and
-  three simplifier timings, all under 10 ms.
+Built, green on the JVM and Jolt, with `bendix.smoke`'s facts holding
+in ClojureScript too:
 
-Milestone 2, first step, implemented 2026-09-13, green on both
-runtimes the same way:
+- `bendix.poly`: sparse multivariate polynomials as maps over a
+  coefficient algebra. Arithmetic, `expt` with a term-count limit,
+  `substitute`, `derivative`, `reduce-square`, evaluation, a total
+  order, and rendering to canonical n-ary terms.
+- `bendix.algebra`: the `Coefficients` protocol, with `rational` (the
+  default) and `GF2` for GF(2^w); `bendix.algebra64`, JVM only, is
+  GF(2^64) (section 4, "Coefficient algebras").
+- `bendix.exponent`: exponent laws for Boolean atoms, field elements
+  and roots of unity (section 4, "Exponents over other algebras").
+- `bendix.analysis`: the polynomial analysis (section 4). A normal
+  form per class, the index from form to class, canonical spelling
+  over defined atoms, `:too-big` and `:conflict`, determining
+  equations and assumptions, the `:prefer` measures, and
+  `inconsistency`, the dev-mode oracle.
+- `bendix.rules`: normal-form rules (`normal-form-rule`, `render`) and
+  the rule sets that ship (section 3): `trig` (`pythagoras`),
+  `powers` (`combine-powers`), `exp-log` (its unconditional half,
+  `combine-exp` and `log-of-exp`) and `derivative`.
+- `bendix.core`: `simplify`, `differentiate`, the shipped costs
+  `default-cost` and `no-D` (section 6), and `class-data` and
+  `serialize` for the egraph-serialize export.
+- `bendix.term`, the CAS's vocabulary over `cromulent.term`;
+  `bendix.num`, the numeric seam for ClojureScript (README,
+  Portability); `bendix.smoke`, the cross-runtime facts.
 
-- `bendix.rules` — `normal-form-rule` and `render` (section 3: a
-  polynomial as a pattern over class ids, with placeholders for nodes
-  the graph does not hold yet), `pythagoras` and the `trig` rule set,
-  and `trig-inconsistency`, the oracle modulo the identity.
-  `bendix.poly/reduce-square` is the reduction, and atoms may now be
-  anything (a placeholder orders by its printed form).
-  `bendix.analysis` exposes `forms` and `threshold`. cromulent gained
-  matches that carry their own right-hand side for this.
-- `materialize-all` builds one extractor and rebuilds once; it
-  rebuilt per class, cubic in the graph, which experiment 4's
-  n = 100 row exposed.
-- Tests (the suite is 31 tests, 141 assertions): `reduce-square`;
-  rendering, with a placeholder; fifteen textbook trig results (the
-  pair in two arrangements of a sum, with a cofactor, after like-term
-  collection, both directions of `1 − sin²`, the cube, `sin⁴ − cos⁴`,
-  arguments merged by the analysis, one pair collapsing beside
-  another argument's lone sine, a lone square staying put);
-  saturation in three iterations with the oracle quiet; the oracle
-  passing an identity and failing an equation outside it; experiment
-  4 as a property (the pair anywhere in a sum of up to six atoms
-  reaches the sum plus 1 at a linear node count); and the numeric
-  oracle on the unit circle over random terms with sines and cosines:
-  value preserved, never grows, cost a fixpoint, graph well-formed and
-  consistent modulo the identity.
-- `bench/` — experiments 4 and 5 (tables and verdict in
-  ../design/ac-problem.md): the pair reached inside a sum of 100
-  atoms at 327 nodes in three iterations, every workload row reached.
+Every rule set is tested by properties against a numeric oracle
+(value preserved where defined, never grows, cost a fixpoint, graph
+well-formed) and by a table of textbook results. `bench/` runs
+experiments 2, 4, 5, 6 and 8 and the simplifier timings.
 
-The term seam (2026-09-13, the former item 1 of section 10):
-`bendix.term` is the CAS's vocabulary (`variable?`, `constant?`,
-`class-id?`, `placeholder?`, `placeholder`, `class-ids`,
-`map-class-ids`, `nodes-with`, `node-with`), used by the analysis, the
-simplifier and the rules in place of type tests; the rules read nodes
-only through `cromulent.term` (which gained `child`); a placeholder is
-any node over class ids, nested allowed, rendered by walking it, and
-one variable `?<id>` names a class id wherever it occurs.
-`bendix.poly` only orders atoms. Tests: the vocabulary, placeholders
-with several children, reading a merged class in node order, and a
-nested placeholder through `render`.
+Open, known:
 
-`powers` (2026-09-13, the former item 1 of section 10):
-`combine-powers` is a normal-form rule over monomials. For every
-atom of a monomial it asks what power it is (`factor`: a variable or
-opaque atom is its own base to the first power; an `[:expt B E]` atom
-is `B` to `k + S`, `k` the constant part of `E`'s data and `S` the
-class of a non-constant exponent), groups factors by base, and where
-a base has two factors, or one power raised to an integer power,
-replaces them by one placeholder `[:expt B (k + Σ c·S)]`; a
-non-negative integer total is then folded by the analysis and the
-class merges through the index. Placeholders gained explicit class
-references (`bendix.term/class-ref`) so a constant can sit beside an
-id, and cromulent gained `lookup` for the class of a variable leaf.
-The domain convention is stated in section 5. Tests: fifteen
-textbook results (symbolic, negative, rational and nested exponents,
-opaque and compound bases, inside a sum, beside a folded square,
-different bases untouched), with the engine as its own oracle where
-the spelling of the exponent may vary (`same-class?`); saturation in
-three iterations; and the numeric oracle over random terms with
-symbolic and negative exponents under `trig` and `powers` together,
-where a point outside the input's domain is skipped: value preserved
-where defined, never grows, cost a fixpoint, graph well-formed. The
-suite is 38 tests, 188 assertions. `bench/`: four powers rows in
-experiment 5.
+- The cost fixpoint fails for a derivative whose root class passes
+  the `:too-big` threshold (section 3, "Limits, named"). The trig
+  derivative property fails about once in eight runs of 200 trials.
+- `pythagoras` on a high power of one sine or cosine (`sin³²x`) hits
+  the node limit before saturation. The result is still right.
+- A power of a sine written as a product beside `pythagoras` reaches
+  a different cost from the same power written as a power (section
+  3, "Limits").
+- A numeric base never meets its coefficient (`2·2ⁿ`; section 3).
+- Results that tie can still differ as terms under `exp-log`
+  (section 9).
 
-`exp-log`, the unconditional part, with the canonical spelling of
-forms and the pluggable join preference (2026-09-13, green on both
-runtimes): the design sketch had `exp` of a sum split into a product;
-prototyping it found the analysis was not canonical modulo the
-graph's own equalities (section 4, "spelled over undefined atoms"),
-and the collecting direction is what merges. `bendix.analysis/canonical`
-expands defined atoms, opaque and variable, with a cycle guard and
-the threshold, and `bendix.poly/substitute` is its arithmetic; `make`
-treats every non-ring node as opaque and folds `exp 0`, `log 1`;
-`modify` indexes every class, an opaque class under its own atom, so
-`sin x · 1` is `sin x` during saturation; the join lets an atom yield
-to a form that defines it and not to one that mentions it, and takes
-a `:prefer` measure
-(`fewest-terms`, `lowest-degree`, `fewest-atoms`, `most-terms`),
-plumbed through `simplify`. `combine-exp` is a normal-form rule over
-monomials, the mirror image of `combine-powers`: the exponential
-factors of a monomial (`factor` finds the base, and the base holds
-`[:exp u]`) become one placeholder `[:exp Σ (k + S)·u]`; the analysis
-normalizes the argument, the index merges it with any class worth
-the same, the hashcons merges the exponential; `log-of-exp` is the
-pattern rule `[:log [:exp ?x]] → ?x`; `exp-log` holds both.
-`normal-form-rule` now visits an opaque class as its unit polynomial,
-so a lone `exp(x)⁻¹` meets `exp(−x)`. Not included: the splitting
-direction, and the conditional rules (section 10 item 2). Tests (the
-suite is 52 tests, 269 assertions): `substitute` by example and as a
-homomorphism; a defined atom and a solved variable spelled by their
-forms so two products merge, a class worth one atom being that atom
-and its own atom hiding nothing, cyclic assertions finite, `exp 0`
-and `log 1` folded, `sin` of a too-big class opaque, `:prefer`
-changing the representative and a bad key refused; twenty-six
-textbook exp-log results, saturation in at most four iterations, the
-two spelling cases (`sin²x·x^(n+m) + cos²x·xⁿ·xᵐ` and its `exp`
-twin) and a non-pair left alone; and the numeric oracle in the
-formal model (section 7) over random terms with exponentials and
-logs under all three rule sets: value preserved where defined, never
-grows, cost a fixpoint, graph well-formed. It found three defects on
-the way: `exp(2x)·1` raised to −1 did not collect because `exp(2x)·1`
-was not the class of `exp(2x)`; `log(exp(1 − x))¹` hid `1 − x` behind
-the class's own atom; and the first fix for that let
-`sin x · y⁻¹ · y` redefine `sin x` as a product mentioning itself,
-which the definition/equation distinction above settles. Known and
-older, found by soaking the trig property: `pythagoras` on a high
-power of one sine or cosine (`sin³²x`) proposes a rendered form whose
-every sub-class gets proposals of its own, and the node limit is hit
-before saturation; the result is still right and the property is
-rarely reached, but it is a real limit of answer 2 on powers, for the
-trig item of section 10. `bench/`:
-seven experiment 5 rows and experiment 6 (../design/ac-problem.md).
-The spelling machinery costs about 1.3× on the 100-atom rows of
-experiments 2 and 4; a benchmark, not a design, decides whether that
-is worth chasing.
-
-`differentiate` (2026-09-13, green on both runtimes), as section 3
-("Differentiation") designs it: `bendix.poly/derivative`;
-`normal-form-rule` over a pattern; `ring-derivative`, `independent`,
-`d-sin`, `d-cos`, `d-exp`, `d-log`, `d-quotient`, `d-power` and
-`d-power-symbolic` as `bendix.rules/derivative`; `no-D` and
-`differentiate` in `bendix.core`; cromulent's extractor ordering
-costs with `compare`. Building it changed the design in four places,
-each found by a test. `no-D` counts what is under a `:D`, not the
-`:D` nodes (section 3). `d-power` fires for any constant exponent
-and folds a constant `u'` (section 3). `derivative` is
-ring-consistent at saturation and not after every application
-(section 3). And three defects in the analysis, none the derivative's
-own: the join read the unit polynomial of another class as an atom
-that yields to a definition, so `[:D c x]` beside `−(−sin x)` kept
-its own name and a root worth `e^y` kept `e^-u · D(e^u)` (section 4,
-merge); the built-in order preferred one term over two unknowns to
-two terms over none, so a root worth `2x + 2` kept `e^-u · D(e^u)`
-and its parents computed with it (section 4, opaque atoms first);
-and the index held only the form a class keeps, so two classes
-sharing a form whose exponential atom was a fresh placeholder when
-its node was created stayed apart (section 4, every form indexed).
-The analysis also folds a constant to a negative integer power, so
-the reference's `2⁻²` is `1/4`. Tests (the suite is 66 tests, 344
-assertions): `derivative` by example and as the properties that
-characterize it (linearity, Leibniz, its values on atoms, symmetry of
-mixed partials); the textbook table (polynomials, each chain rule, a
-quotient, rational, negative and symbolic exponents, `x^x` under
-`powers`, nesting, a second derivative and a mixed partial, `π`, an
-unknown operator of another variable, a leftover `:D` pushed as far
-as the rules go, `f'g + fg'` for unknown `f` and `g`, a `:D` inside
-`simplify`); the result shape and the refused variable; saturation
-in at most the depth plus two iterations; and the reference
-differentiator over random terms with trig and with exponentials:
-the result complete and saturated, in the reference's class under
-the same rules, equal to it numerically in the models of section 7,
-its cost a fixpoint; ring-consistent at saturation, and the
-per-application check tripping on exactly the `sin y` transient; the
-graph well-formed under every rule set. A soak of a thousand trials
-per property on the way found the three analysis defects and a
-division by zero the evaluator now reports as undefined; one
-non-convergence of the analysis (the round limit, six classes
-cycling) was seen once before every form was indexed and not again
-in five suite runs and fifteen thousand soak trials after. `bench/`:
-a sum of ten sines differentiates in 4 iterations at 100 nodes and
-one of a hundred in 4 iterations at 1000 nodes; five nested sines in
-7 iterations, twenty in 22, the depth plus two, all under 60 ms on
-the JVM. cromulent: 49 tests, 172 assertions, one new for vector
-costs.
-
-The join's definitions (2026-09-16, green on both runtimes, Jolt
-v0.8.8): the suite on Jolt found `simplify` not a fixpoint twice.
-One was the analysis: an atom yielded to a form whose atom was built
-from it (section 4, merge), so `eˣ` was spelled as
-`exp(eˣ)⁻¹·D(exp(eˣ))` for the rest of the run; `defines?` now
-refuses a form with an atom reachable from the defined atom through
-the children of opaque nodes, and the derivative term that found it
-is a test (the suite is 67 tests, 347 assertions). The other was
-`combine-powers` against the size cost, closed below. The
-seed of the powers failure reproduces on the JVM at trial 45
-(`1789597929120`); the derivative's does not carry across runtimes,
-the shrunk term does.
-
-One power per base, and a narrower contract (2026-09-20, green on
-both runtimes, Jolt v0.8.10). Tracing the powers failure showed a
-canonicity defect, not only a fixpoint one: three spellings of
-`a·y^(n+1)` gave costs 6, 7 and 7, because the rule proposed the
-combined power alone and under fewest nodes the cheaper `a·y·yⁿ`
-existed only when the input or another rule's rendering held it
-(section 3, `combine-powers`). Two fixes were built the same day. The
-first, a second canonical form (`split-form`, the positive integer
-part of an exponent returned to the ring; experiment 7), closed the
-defect and printed `y·yⁿ` for `y^(n+1)`. The second replaced it:
-section 6 now says how the default's opinions are decided
-(soundness, canonicity, the convention of the established systems
-for the equivalent request, fewest nodes, and every use of convention
-recorded with a survey read from their documentation and source, the
-alternatives and a verdict), and its first use decided one power per
-base. `default-cost` charges a `:*` node 2 for each base that
-appears in more than one of its children, the bases read from the
-children's class polynomials (`bendix.rules/power-bases`), so
-`combine-powers`' one form is the cheapest spelling under both
-shipped costs; the shipped costs are functions of the saturated
-e-graph, `:cost` is `(fn [g] cost-fn)`, `bendix.core/size` is the
-plain cost they build on and `bendix.core/term-cost` what a term
-costs as written; `split-form` is removed. All the spellings of
-`a·y^(n+1)` reach 7 and `[:* :a [:expt :y [:+ :n 1]]]`, `y^(n+1)`
-comes back as itself, `y·y` is `y²` with or without rules, the
-seed's term is a fixpoint at once, and never-grows is restated (a
-result may be one node larger for each repeated base it combined;
-section 6). The contract narrowed with it: section 6 promises
-soundness for any cost, and canonicity, the cost fixpoint and
-never-grows for the costs that ship against the rule sets that ship;
-the unbuilt cost combinators are struck; `:prefer` is an option of
-the analysis and no longer of `simplify` (section 4). Tests (the
-suite is 70 tests, 366 assertions): the spellings by example with the
-seed's term; canonicity as a property, `b^(s+k)` beside a cofactor
-written four ways in a random context reaching one cost;
-never-grows as the restated bound for every rule set; `term-cost`;
-`the-preference-is-a-measure` no longer goes through `simplify`.
-Soaks: two thousand fixpoint trials and a thousand canonicity trials
-passed under the charge with one form. `bench/`: experiment 8
-replaces experiment 7's rows (../design/ac-problem.md has both), and
-experiment 6 builds its own e-graph to reach `:prefer`. Open, found
-by experiment 8's soak and older than this work: a power of a sine
-written as a product beside `pythagoras` reaches a different cost
-from the same power written as a power (section 3, "Limits"); also
-recorded there, a numeric base never meets its coefficient
-(`2·2ⁿ`), and in section 9, results that tie can differ as terms.
-Section 8 lists, with sources, where a system that holds every form
-can differ from those that hold one.
-
-Open, found 2026-09-25 by a random seed of the trig derivative
-property and reproduced on the engine before and after that day's
-cromulent change: the cost fixpoint fails for a derivative whose root
-class passes the `:too-big` threshold (section 3, "Limits, named").
-The property fails about once in eight runs of 200 trials.
-
-Not yet: everything in section 10, other syntaxes, explanations.
-
-The port to ClojureScript (2026-09-25, for ../orrery): the five
-source namespaces renamed to `.cljc`, and `bendix.num` added as the
-numeric seam (README, Portability). Everything else compiled
-unchanged. The edits were the coefficient sites: `+'`, `*'`, `/`,
-`ratio?`, `numerator`, `denominator`, `abs` and `compare` on
-coefficients in `bendix.poly`, the two constant folds in
-`bendix.analysis`, the exponent sums in `bendix.rules` and
-`d-power`'s arithmetic, and `65/64` in `bendix.core/size` written as
-a division, the ClojureScript compiler having no ratio constant.
-Exponents stay plain integers. Tests: `bendix.num-test` on the JVM
-and Jolt, and `bendix.smoke`, twenty-five facts (results, counts,
-per-rule counts, costs as doubles, a ratio printed and read back)
-asserted by `bendix.smoke-test` here and by orrery's node build and
-browser self-test; all of them agree on the three runtimes. The
-suite is 75 tests, 419 assertions.
-
-The export (2026-09-26, for ../orrery; 76 tests, 428 assertions):
-`bendix.core/class-data`, the class as the polynomial analysis sees
-it for `cromulent.export`, its kind as the `type` (polynomial, atom,
-too-big, conflict) and a polynomial's normal form as a term in the
-native spelling with an opaque class written `#id`; and
-`bendix.core/serialize`, the egraph-serialize data of a graph with
-that class data and every node costed under `default-cost`.
-
-The coefficient seam (2026-10-01, section 4, "Coefficient
-algebras"): `bendix.algebra` (`Coefficients`, `rational`); every
-coefficient site in `bendix.poly` and `bendix.analysis` goes through
-it. No behaviour changed: the suite (77 tests, 430
-assertions) passes on the JVM and Jolt, the bench gives identical
-results on both (JVM 2802 ms before and 2807 ms after over every row,
-Jolt 4501 ms and 4615 ms), and `bendix.smoke`'s 25 facts hold in
-ClojureScript on Node.
+Not yet: section 10 (the sign lattice and `:assume`, `const` for
+non-ring operators, more trig, rational functions), explanations
+(cromulent's, ../cromulent/ideas/explanations.md), other syntaxes.
