@@ -31,6 +31,7 @@
   them: keywords first, then integers, then anything else by its
   printed form. `map-atoms` renames them; `substitute` replaces them
   by polynomials."
+  (:refer-clojure :exclude [divide])
   (:require [bendix.algebra :as alg]
             [bendix.exponent :as ex]
             [bendix.num :as num]))
@@ -317,6 +318,78 @@
          (when (and alpha (<= (count p) 2))
            (when-let [x (alg/div algebra beta alpha)]
              [v (alg/neg algebra x)])))))))
+
+;; ---------------------------------------------------------------------------
+;; division
+
+(defn- deglex
+  "A monomial order: compare m1 and m2 by total degree, then by the
+  exponent of each atom in atom order, the larger exponent first.
+  Positive when m1 is the larger. Unlike `monomial-key`, which orders
+  terms for printing, this one is multiplicative (m1 < m2 implies
+  m·m1 < m·m2), which division needs."
+  [m1 m2]
+  (let [c (compare (reduce + 0 (vals m1)) (reduce + 0 (vals m2)))]
+    (if (not= 0 c)
+      c
+      (or (some (fn [v]
+                  (let [c (compare (get m1 v 0) (get m2 v 0))]
+                    (when (not= 0 c) c)))
+                (sort-by atom-key (distinct (concat (keys m1) (keys m2)))))
+          0))))
+
+(defn leading-term
+  "The [monomial coefficient] of p that is largest in degree-then-atom
+  order (a multiplicative order); nil for zero."
+  [p]
+  (when (seq p)
+    (reduce (fn [best t] (if (pos? (deglex (key t) (key best))) t best)) p)))
+
+(defn leading-coefficient
+  "The coefficient of p's leading term; nil for zero."
+  [p]
+  (some-> (leading-term p) val))
+
+(defn- monomial-quotient
+  "m1 / m2 when m2 divides m1, else nil."
+  [m1 m2]
+  (reduce-kv (fn [m v e]
+               (let [e1 (get m v 0)]
+                 (cond (< e1 e) (reduced nil)
+                       (= e1 e) (dissoc m v)
+                       :else (assoc m v (- e1 e)))))
+             m1
+             m2))
+
+(defn divide
+  "p / q when q divides p exactly in the free polynomial ring, else nil.
+  Rational coefficients (a field) only. Division by one polynomial
+  decides divisibility: if q divides p, the leading term of q divides
+  the leading term of every remainder, so the first one it does not
+  divide is a proof that q does not divide p. Division by zero is nil."
+  ([p q] (divide alg/rational p q))
+  ([algebra p q]
+   (cond
+     (empty? q) nil
+     (empty? p) zero
+     (= 1 (count q))
+     (let [[mq cq] (first q)]
+       (reduce-kv (fn [acc m c]
+                    (if-let [m' (monomial-quotient m mq)]
+                      (assoc acc m' (alg/div algebra c cq))
+                      (reduced nil)))
+                  zero
+                  p))
+     :else
+     (let [[mq cq] (leading-term q)]
+       (loop [r p, quotient zero]
+         (if (empty? r)
+           quotient
+           (let [[mr cr] (leading-term r)]
+             (if-let [m' (monomial-quotient mr mq)]
+               (let [t {m' (alg/div algebra cr cq)}]
+                 (recur (sub algebra r (mul algebra t q)) (add algebra quotient t)))
+               nil))))))))
 
 (defn smaller
   "The smaller of p and q under `compare-polys`."

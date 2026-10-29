@@ -570,8 +570,8 @@ zero polynomial is 1 and `:log` of the constant 1 is 0, the two points
 of that family where an exact value exists; any other node is opaque,
 whatever its children's data (a `sin` of a `:too-big` class is an
 atom, not too big). Negative exponents and division by a non-constant
-are not ring operations and stay opaque for now (a rational-function
-normal form is a later analysis).
+are not ring operations and stay opaque here; the rational-function
+analysis below sees through them.
 
 **merge** is the semilattice join. Two equal polynomials join to
 themselves. Two different ones mean this e-graph asserts they are
@@ -699,6 +699,46 @@ own; that is a rule (a normal-form rule, section 3). It does not
 decide equality of rational functions, or of anything under a radical
 or a transcendental function. It is the ring fragment, complete there
 and honest about its edges.
+
+### The rational-function analysis
+
+`bendix.ratfun` and `bendix.ratfun-analysis`: division by a
+non-constant, which the polynomial analysis leaves opaque, folded into
+a normal form, so that spellings of one rational function (a sum of
+fractions and its common-denominator form, a partial-fraction
+decomposition and the product it came from) are merged by the index
+with no rule run. A form is the numerator, expanded, over
+a denominator kept as a product of factors: `{:num p :den {d e}}`,
+each `d` non-constant with leading coefficient 1 under a
+multiplicative monomial order (`bendix.poly/leading-term`, degree then
+atoms) and no `d` dividing `p`, which exact division
+(`bendix.poly/divide`) decides. A factor comes from inverting a
+polynomial: its scalar and its monomial content are split off. A
+product remembers its operands' numerators as a hint in metadata,
+which never changes equality, so inverting `(x + y)·(x − y)` written
+as a product gives two factors and not their expansion.
+
+Equal forms are always equal functions. Equal functions have equal
+forms when every denominator factor is irreducible: then the factors
+are coprime and ℚ[atoms] factors uniquely. A reducible factor (the
+expansion of a product, inverted whole) is kept whole, and its form
+can be one of several for the function; the index then misses a
+merge and never makes a wrong one. Factoring would close that gap.
+Until then the analysis is complete for denominators that are products
+of linear forms, and of anything else whose factors arrive as the
+operands of a product.
+
+The analysis has the polynomial analysis's shape: data is a form,
+`{:atom id}` for an opaque class, or `:too-big`; `canonical` maps
+atoms to roots and replaces an atom whose class now has a form; the
+index merges classes with one form and indexes every form that met in
+a class, its unions journalled with the reason `:ratfun`; the join
+keeps the smaller form under a well-founded order
+(`bendix.ratfun/compare-ratfuns`). Division by a class whose form is
+zero is opaque. Scope: ℚ and free atoms, no coefficient algebras or
+exponent laws, no `:conflict` and no solving of linear equations,
+which the polynomial analysis has. The two analyses can run in one
+e-graph; neither reads the other.
 
 ### Coefficient algebras
 
@@ -1362,8 +1402,12 @@ built normal-form rules, `pythagoras`, the term seam in the rules,
    (section 3). The alternative to measure against: fold the
    Pythagorean identity into the analysis itself, so no node is ever
    added for it and the index does the merging.
-4. Rational-function normal forms, or division under a nonzero
-   analysis: open. The candidate first step is the division bridge,
+4. Rational-function normal forms: a first one exists, as a separate
+   analysis (section 4, "The rational-function analysis"). Open: making it
+   and the polynomial analysis one analysis, with coefficient algebras
+   and exponent laws; rendering its forms as materialized terms, as
+   `materialize` does for polynomials; and the rule sets running under
+   it. The alternatives considered before it existed: the candidate first step is the division bridge,
    `[:/ ?a ?b] = [:* ?a [:expt ?b -1]]` in `powers`, considered and
    deferred while designing `derivative` (2026-09-13): it makes
    division a spelling of a negative power, so `combine-powers` and
@@ -1407,6 +1451,10 @@ in ClojureScript too:
   over defined atoms, `:too-big` and `:conflict`, determining
   equations and assumptions, the `:prefer` measures, and
   `inconsistency`, the dev-mode oracle.
+- `bendix.ratfun` and `bendix.ratfun-analysis`: rational functions
+  in a normal form, and the analysis that carries and indexes them
+  (section 4, "The rational-function analysis"); exact division and a
+  multiplicative leading term in `bendix.poly`.
 - `bendix.rules`: normal-form rules (`normal-form-rule`, `render`) and
   the rule sets that ship (section 3): `trig` (`pythagoras`),
   `powers` (`combine-powers`), `exp-log` (its unconditional half,
@@ -1428,6 +1476,10 @@ Open, known:
 - The cost fixpoint fails for a derivative whose root class passes
   the `:too-big` threshold (section 3, "Limits, named"). The trig
   derivative property fails about once in eight runs of 200 trials.
+  The exp-log one,
+  `derivatives-agree-with-the-reference-over-exp-log`, fails
+  occasionally too: once in nine full runs on 2026-10-28, at
+  {:x -2, :y 2} on a product of exp-log terms.
 - `pythagoras` on a high power of one sine or cosine (`sin³²x`) hits
   the node limit before saturation. The result is still right.
 - A power of a sine written as a product beside `pythagoras` reaches
@@ -1438,5 +1490,6 @@ Open, known:
   (section 9).
 
 Not yet: section 10 (the sign lattice and `:assume`, `const` for
-non-ring operators, more trig, rational functions), explanations
+non-ring operators, more trig, rational functions beyond the first
+analysis), explanations
 (cromulent's, ../cromulent/ideas/explanations.md), other syntaxes.

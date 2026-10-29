@@ -95,6 +95,28 @@ ring part of a derivative is computed from the class's normal form
 and the chain rule is one pattern rule per operator, extracted under
 `no-D`, a cost that counts what is still under a `:D` before size.
 
+Division by anything but a constant is opaque to the polynomial
+analysis. `bendix.ratfun-analysis` is a second analysis that folds it:
+each class carries a rational function as an expanded numerator over
+a product of denominator factors, and classes with the same form are
+merged, so a partial-fraction decomposition joins the product it came
+from without a rule:
+
+```clojure
+(require '[bendix.ratfun-analysis :as ra] '[cromulent.core :as eg])
+
+(let [g (ra/egraph)
+      [g a] (eg/add g [:/ 1 [:* :x :y]])
+      [g b] (eg/add g [:* [:/ 1 [:- :y :x]] [:- [:/ 1 :x] [:/ 1 :y]]])
+      g (eg/rebuild g)]
+  (= (eg/find g a) (eg/find g b)))
+;; => true
+```
+
+Equal forms are always equal functions; equal functions reach equal
+forms whenever the denominator factors are irreducible (IDEA.md
+section 4, "The rational-function analysis").
+
 ## Running
 
 ```
@@ -108,7 +130,8 @@ what CI tests against. The `:local` alias uses the checkout at
 
 ## Portability
 
-The six source namespaces are `.cljc` and compile under ClojureScript
+The source namespaces, all but the JVM-only `bendix.algebra64`, are
+`.cljc` and compile under ClojureScript
 too ([orrery](https://github.com/noonian/orrery) runs them in the
 browser). `bendix.num` is the one seam: exact rational arithmetic that
 is Clojure's own on the JVM and Jolt, and in ClojureScript a `Ratio`

@@ -5,6 +5,7 @@
             [bendix.algebra-test]
             [bendix.exponent-test]
             [bendix.poly-test]
+            [bendix.ratfun-test]
             [bendix.term-test]
             [bendix.analysis-test]
             [bendix.core-test]
@@ -17,6 +18,7 @@
                                           'bendix.algebra-test
                                           'bendix.exponent-test
                                           'bendix.poly-test
+                                          'bendix.ratfun-test
                                           'bendix.term-test
                                           'bendix.analysis-test
                                           'bendix.core-test
