@@ -2,7 +2,8 @@
   "Runtime-stable facts about the simplifier, the same on the JVM, on
   Jolt and in ClojureScript: results whose cost is a unique minimum,
   class and node counts, iterations, stop reasons, per-rule counts,
-  and bendix.num's exact numbers printed and read back. Never a class
+  bendix.num's exact numbers printed and read back, and the polynomial
+  gcd and rational-function normal form. Never a class
   id and never a tied term (cromulent.smoke says why). `checks` is
   plain data: bendix.smoke-test asserts it under clojure.test, and
   orrery's node build and browser self-test run it."
@@ -10,6 +11,8 @@
             [bendix.core :as bx :refer [simplify differentiate]]
             [bendix.exponent :as ex]
             [bendix.num :as num]
+            [bendix.poly :as poly]
+            [bendix.ratfun :as rf]
             [bendix.rules :as rules]
             [cromulent.core :as eg]
             [cromulent.rewrite :as rw]))
@@ -88,5 +91,21 @@
             (result [:+ [:* [:+ :x 1] [:+ :y 1]] 1] {:algebra (alg/gf2 1) :exponent-laws (constantly ex/idempotent)}))
      (check "an atom ranging over GF(4): x⁴ is x"
             :x (result [:expt :x 4] {:algebra (alg/gf2 2) :exponent-laws (constantly (ex/field-element 4))}))
+     (let [x (poly/variable :x), y (poly/variable :y)]
+       (check "gcd(x² − y², x² − 2xy + y²) is x − y"
+              [:+ :x [:* -1 :y]]
+              (poly/->term (poly/gcd (poly/sub (poly/mul x x) (poly/mul y y))
+                                     (poly/add (poly/sub (poly/mul x x) (poly/scale (poly/mul x y) 2)) (poly/mul y y)))
+                           identity)))
+     (let [x (rf/variable :x), y (rf/variable :y), x2-y2 (rf/sub (rf/mul x x) (rf/mul y y))]
+       (check "(x − y)/(x² − y²) cancels to 1/(x + y)"
+              [:/ 1 [:+ :x :y]]
+              (rf/->term (rf/div (rf/sub x y) x2-y2))))
+     (let [x (rf/variable :x), y (rf/variable :y)
+           a (rf/inverse (rf/sub (rf/mul x x) (rf/mul y y)))
+           b (rf/inverse (rf/mul (rf/add x y) (rf/sub x y)))]
+       (check "two splittings of 1/(x² − y²): one function, joined to the finer"
+              [true 2 2]
+              [(rf/same-function? a b) (count (:den (rf/join a b))) (count (:den (rf/join b a)))]))
      (check "a cube root of unity: w⁻² is w"
             :w (result [:expt :w -2] {:algebra (alg/gf2 2) :exponent-laws {:w (ex/root-of-unity 3)}}))]))

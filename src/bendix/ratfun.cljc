@@ -6,23 +6,23 @@
 
   p is a bendix.poly polynomial; each d is a non-constant polynomial
   with leading coefficient 1 (`bendix.poly/leading-term`) and e its
-  positive exponent; no d divides p. Zero is {:num {} :den {}}; a
-  polynomial is itself over the empty denominator. Plain maps, so
-  equality is structural and a form can key an index.
+  positive exponent. Every d is squarefree, every two are coprime, and
+  none shares a factor with p (each checked with `bendix.poly/gcd`).
+  Zero is {:num {} :den {}}; a polynomial is itself over the empty
+  denominator. Plain maps, so a form can key an index.
 
   A denominator factor comes from inverting a polynomial. Its scalar
   and the content of its monomials are split off, so that x·y·(x − y)
-  becomes the factors x, y and x − y, and what remains is one factor.
-  The form is unique, so equal rational functions have equal forms,
-  whenever every factor is irreducible: then no factor divides the
-  numerator, distinct factors are coprime, and ℚ[atoms] factors
-  uniquely. A product remembers how its numerator factors (`hint`),
-  so (x − y)·(x + y) inverted gives two factors. A reducible
-  polynomial with no such history (x² − y² inverted) is kept whole,
-  and the form may then be one of several for its function. Equal
-  forms always mean equal functions: the normal form is sound
-  everywhere and complete where the factors are irreducible, which a
-  denominator that is a product of linear forms always is.
+  becomes the factors x, y and x − y, and what remains is one factor,
+  refined by gcds against the others. A product remembers how its
+  numerator factors (`hint`), so (x − y)·(x + y) inverted gives two
+  factors; x² − y² inverted with no such history is one. Without
+  factoring polynomials the split into factors is therefore not
+  unique, but the function's `index-key` is: the numerator and the
+  denominator's squarefree parts, which equal rational functions
+  always share. Compare and index forms by it (`same-function?`), and
+  `join` two splittings of one function into their common
+  refinement.
 
   Atoms are those of bendix.poly: keywords, class ids, placeholders.
   The ring is free: no exponent laws, ℚ coefficients only."
@@ -63,10 +63,24 @@
 ;; ---------------------------------------------------------------------------
 ;; normalizing
 
+(def too-big
+  "What an operation given a size limit returns past it."
+  ::too-big)
+
+(defn- size* [r]
+  (reduce + (poly/term-count (:num r)) (map poly/term-count (keys (:den r)))))
+
+(defn- over? [r limit] (and limit (> (size* r) limit)))
+
 (defn- den-poly
-  "The denominator of r expanded."
-  [den]
-  (reduce-kv (fn [acc d e] (poly/mul acc (poly/expt d e))) (poly/constant 1) den))
+  "The denominator of r expanded; nil past limit terms."
+  ([den] (den-poly den nil))
+  ([den limit]
+   (reduce-kv (fn [acc d e]
+                (let [acc (some->> (poly/expt d e limit) (poly/mul acc))]
+                  (if (or (nil? acc) (and limit (> (count acc) limit))) (reduced nil) acc)))
+              (poly/constant 1)
+              den)))
 
 (defn hint
   "Polynomials whose product is r's numerator up to a non-zero scalar:
@@ -84,32 +98,85 @@
     (with-meta r {::factors (vec (remove poly/constant? hs))})
     r))
 
+(defn- add-factor [den d e]
+  (if (or (clojure.core/zero? e) (poly/constant? d)) den (update den d (fnil + 0) e)))
+
+(defn- common-factor
+  "The non-constant gcd of p and the factor d, or nil when they are
+  coprime. A linear d is irreducible, so it divides p or is coprime."
+  ([p d] (common-factor p (poly/atoms p) d))
+  ([p p-atoms d]
+   (cond
+    (poly/constant? p) nil
+    (not-any? p-atoms (poly/atoms d)) nil
+    (= 1 (poly/degree d)) (when (poly/divide p d) d)
+    :else (let [g (poly/gcd p d)] (when-not (poly/constant? g) g)))))
+
+(defn- split-once
+  "den with one factor that is not squarefree, or one pair of factors
+  that are not coprime, split by a gcd; nil when every factor is
+  squarefree and every two are coprime."
+  [den]
+  (let [fs (vec (keys den))]
+    (or (some (fn [d]
+                (when (< 1 (poly/degree d))
+                  (some (fn [v]
+                          (let [g (poly/gcd d (poly/derivative d v))]
+                            (when-not (poly/constant? g)
+                              (-> (dissoc den d)
+                                  (add-factor g (den d))
+                                  (add-factor (poly/divide d g) (den d))))))
+                        (poly/atoms d))))
+              fs)
+        (some (fn [[a b]]
+                (when-let [g (common-factor a b)]
+                  (-> (dissoc den a b)
+                      (add-factor g (+ (den a) (den b)))
+                      (add-factor (poly/divide a g) (den a))
+                      (add-factor (poly/divide b g) (den b)))))
+              (for [i (range (count fs)), j (range (inc i) (count fs))] [(fs i) (fs j)])))))
+
+(defn- basis
+  "den with its factors refined until each is squarefree and every two
+  are coprime; the product is unchanged. Each split lowers the factors'
+  total degree or, at the same degree, adds a factor, so it ends."
+  [den]
+  ;; distinct factors with leading coefficient 1, all linear, are
+  ;; already squarefree and coprime: the common case, and ribbon's
+  (if (every? #(= 1 (poly/degree %)) (keys den))
+    den
+    (loop [den den]
+      (if-let [den' (split-once den)] (recur den') den))))
+
 (defn- divide-hint
-  "hs with one of its polynomials divided by d, or nil when none is
-  divisible by it."
+  "hs with d divided out of its polynomials, piece by piece, or nil when
+  d does not divide their product."
   [hs d]
-  (loop [i 0]
-    (when (< i (count hs))
-      (if-let [q (poly/divide (nth hs i) d)]
-        (assoc hs i q)
-        (recur (inc i))))))
+  (loop [i 0, hs hs, d d]
+    (cond
+      (poly/constant? d) hs
+      (= i (count hs)) nil
+      :else (if-let [g (common-factor (nth hs i) d)]
+              (recur i (assoc hs i (poly/divide (nth hs i) g)) (poly/divide d g))
+              (recur (inc i) hs d)))))
 
 (defn- cancel
-  "num over den with every factor divided out of num as often as it
-  divides it. hs, a hint for num (see `hint`), is kept up to date, or
-  dropped when a division cannot be read off one of its polynomials."
+  "num over den in normal form: den's factors refined (`basis`), then
+  every factor that shares a factor with num split by their gcd and the
+  shared part divided out of num. hs, a hint for num (see `hint`), is
+  kept up to date, or dropped when a division cannot be read off it."
   ([num den] (cancel num den nil))
   ([num den hs]
    (if (empty? num)
      zero
-     (loop [num num, hs (some-> hs vec), out {}, ds (seq den)]
-       (if-let [[[d e] & more] ds]
-         (let [[num hs e] (loop [num num, hs hs, e e]
-                            (if-let [q (when (pos? e) (poly/divide num d))]
-                              (recur q (some-> hs (divide-hint d)) (dec e))
-                              [num hs e]))]
-           (recur num hs (if (pos? e) (assoc out d e) out) more))
-         (with-hint {:num num :den out} hs))))))
+     (loop [num num, hs (some-> hs vec), den (basis den)]
+       (if-let [[d g] (let [as (poly/atoms num)]
+                        (some (fn [d] (when-let [g (common-factor num as d)] [d g])) (keys den)))]
+         (let [e (den d)]
+           (if (= g d)
+             (recur (poly/divide num d) (some-> hs (divide-hint d)) (add-factor (dissoc den d) d (dec e)))
+             (recur num hs (basis (-> (dissoc den d) (add-factor g e) (add-factor (poly/divide d g) e))))))
+         (with-hint {:num num :den den} hs))))))
 
 (defn- content
   "p as [c m q]: p = c · m · q, c a rational, m a monomial whose atoms
@@ -126,20 +193,25 @@
         c (poly/leading-coefficient q)]
     [c m (poly/scale q (num/div 1 c))]))
 
+(defn- factor-map
+  "Polynomials hs as a factorization {d e}: each split into its scalar,
+  its monomial content and the rest, with leading coefficient 1."
+  [hs]
+  (reduce (fn [den h]
+            (let [[_ m q] (content h)]
+              (reduce-kv (fn [den v e] (add-factor den (poly/variable v) e))
+                         (add-factor den q 1)
+                         m)))
+          {}
+          hs))
+
 (defn- factors
   "The denominator factors of r's non-zero numerator, as [c den]:
-  numerator = c · Π d^e. Each polynomial of r's hint is split into
-  its scalar, its monomial content and the rest."
+  numerator = c · Π d^e, read off r's hint."
   [r]
-  (let [den (reduce (fn [den h]
-                      (let [[_ m q] (content h)]
-                        (cond-> (reduce-kv (fn [den v e] (update den (poly/variable v) (fnil + 0) e)) den m)
-                          (not (poly/constant? q)) (update q (fnil + 0) 1))))
-                    {}
-                    (hint r))]
-    ;; every d has leading coefficient 1 and the order is
-    ;; multiplicative, so the product's leading coefficient is 1 too
-    [(poly/leading-coefficient (:num r)) den]))
+  ;; every d has leading coefficient 1 and the order is
+  ;; multiplicative, so the product's leading coefficient is 1 too
+  [(poly/leading-coefficient (:num r)) (factor-map (hint r))])
 
 ;; ---------------------------------------------------------------------------
 ;; arithmetic
@@ -173,25 +245,41 @@
 (defn product [rs] (reduce mul one rs))
 
 (defn inverse
-  "1/r, or nil for zero."
-  [r]
-  (when-not (zero? r)
-    (let [[c den] (factors r)]
-      (cancel (poly/scale (den-poly (:den r)) (num/div 1 c)) den (vec (mapcat (fn [[d e]] (repeat e d)) (:den r)))))))
+  "1/r, or nil for zero. With a limit, `too-big` when the expanded
+  denominator or the result passes limit terms."
+  ([r] (inverse r nil))
+  ([r limit]
+   (when-not (zero? r)
+     (let [[c den] (factors r)
+           d (den-poly (:den r) limit)]
+       (if (nil? d)
+         too-big
+         (let [r' (cancel (poly/scale d (num/div 1 c)) den (vec (mapcat (fn [[d e]] (repeat e d)) (:den r))))]
+           (if (over? r' limit) too-big r')))))))
 
 (defn div
-  "a/b, or nil when b is zero."
-  [a b]
-  (some->> (inverse b) (mul a)))
+  "a/b, or nil when b is zero. With a limit, `too-big` past it."
+  ([a b] (div a b nil))
+  ([a b limit]
+   (let [i (inverse b limit)]
+     (if (or (nil? i) (= too-big i))
+       i
+       (let [r (mul a i)] (if (over? r limit) too-big r))))))
 
 (defn expt
-  "r to the integer power n; nil for a negative power of zero."
-  [r n]
-  (cond
-    (neg? n) (some-> (inverse r) (expt (- n)))
-    (clojure.core/zero? n) one
-    :else (cancel (poly/expt (:num r) n) (into {} (map (fn [[d e]] [d (* e n)])) (:den r))
-                  (vec (apply concat (repeat n (hint r)))))))
+  "r to the integer power n; nil for a negative power of zero. With a
+  limit, `too-big` as soon as a power being built passes limit terms."
+  ([r n] (expt r n nil))
+  ([r n limit]
+   (cond
+     (neg? n) (let [i (inverse r limit)]
+                (if (or (nil? i) (= too-big i)) i (expt i (- n) limit)))
+     (clojure.core/zero? n) one
+     :else (if-let [p (poly/expt (:num r) n limit)]
+             (let [r' (cancel p (into {} (map (fn [[d e]] [d (* e n)])) (:den r))
+                              (vec (apply concat (repeat n (hint r)))))]
+               (if (over? r' limit) too-big r'))
+             too-big))))
 
 ;; ---------------------------------------------------------------------------
 ;; reading
@@ -204,7 +292,7 @@
 (defn size
   "Terms in the numerator and in every denominator factor."
   [r]
-  (reduce + (poly/term-count (:num r)) (map poly/term-count (keys (:den r)))))
+  (size* r))
 
 (defn evaluate
   "The value of r under env, a map from atom to rational; nil where
@@ -215,33 +303,132 @@
       (num/div (poly/evaluate (:num r) env) d))))
 
 (defn- evaluate-poly
-  "p with each atom v replaced by (f v), a form, as a form."
-  [p f]
+  "p with each atom v replaced by (f v), a form, as a form; `too-big`
+  past limit."
+  [p f limit]
   (reduce-kv (fn [acc m c]
-               (add acc (scale (reduce-kv (fn [x v e] (mul x (expt (f v) e))) one m) c)))
+               (let [t (reduce-kv (fn [x v e]
+                                    (let [x (let [pw (expt (f v) e limit)]
+                                              (when-not (= too-big pw) (mul x pw)))]
+                                      (if (or (nil? x) (over? x limit)) (reduced nil) x)))
+                                  one
+                                  m)
+                     acc (when t (add acc (scale t c)))]
+                 (if (or (nil? acc) (over? acc limit)) (reduced too-big) acc)))
              zero
              p))
 
 (defn substitute
   "r with each atom v replaced by (f v), a form. Atoms that become
-  equal combine, and the result is normalized again. nil when a
-  denominator factor becomes zero."
-  [r f]
-  (reduce-kv (fn [acc d e] (when acc (some->> (expt (evaluate-poly d f) (- e)) (mul acc))))
-             (evaluate-poly (:num r) f)
-             (:den r)))
+  equal combine, and the result is normalized again. The numerator is
+  substituted one polynomial of its hint at a time, so what is known
+  of how it factors survives. nil when a denominator factor becomes
+  zero; with a limit, `too-big` as soon as a form being built passes
+  limit terms."
+  ([r f] (substitute r f nil))
+  ([r f limit]
+   (if (zero? r)
+     zero
+     (let [hs (hint r)
+           s (num/div (poly/leading-coefficient (:num r))
+                      (reduce num/mul 1 (map poly/leading-coefficient hs)))
+           step (fn [acc x] (cond (= too-big x) (reduced too-big)
+                                  (nil? x) (reduced nil)
+                                  :else (let [r (mul acc x)] (if (over? r limit) (reduced too-big) r))))
+           n (reduce step (constant s) (map #(evaluate-poly % f limit) hs))]
+       (reduce-kv (fn [acc d e]
+                    (if (or (nil? acc) (= too-big acc))
+                      (reduced acc)
+                      (let [b (evaluate-poly d f limit)]
+                        (if (= too-big b)
+                          (reduced too-big)
+                          (let [x (expt b (- e) limit)]
+                            (step acc x))))))
+                  n
+                  (:den r))))))
+
+;; ---------------------------------------------------------------------------
+;; equality and order
+
+(defn index-key
+  "What two forms of one rational function share, however their
+  denominators are split into factors: the numerator and, for each
+  exponent e, the product of the factors raised to e. With every
+  factor squarefree and every two coprime (`cancel`'s invariant) that
+  product is the denominator's squarefree part of multiplicity e,
+  which is unique, and the numerator is coprime to the denominator,
+  which is monic; so equal functions have equal keys and unequal
+  functions unequal ones. Expanded per exponent, not whole, so a high
+  power of one factor stays small."
+  [r]
+  {:num (:num r)
+   :den (reduce-kv (fn [acc d e] (update acc e (fnil poly/mul (poly/constant 1)) d)) {} (:den r))})
+
+(defn same-function?
+  "Are a and b forms of one rational function?"
+  [a b]
+  (= (index-key a) (index-key b)))
+
+(defn- multiplicity [d b]
+  (loop [d d, k 0]
+    (if-let [q (poly/divide d b)] (recur q (inc k)) k)))
+
+(defn- refine
+  "The common refinement of two factorizations {d e} of one polynomial:
+  the `basis` of their factors together, each element with the
+  exponent that keeps a's product."
+  [a b]
+  (if (= a b)
+    a
+    (let [bs (keys (basis (merge-with + a b)))]
+      (reduce-kv (fn [acc d e]
+                   (reduce (fn [acc x] (add-factor acc x (* e (multiplicity d x)))) acc bs))
+                 {}
+                 a))))
+
+(defn join
+  "a and b, two forms of one rational function (`same-function?`), as
+  one form that keeps what each knows of how it factors: the common
+  refinement of their denominators and of their hints. Symmetric, so a
+  class that meets both forms in any order ends with the same one."
+  [a b]
+  (let [ma (::factors (meta a)), mb (::factors (meta b))
+        hs (cond (nil? ma) mb
+                 (nil? mb) ma
+                 (= ma mb) ma
+                 :else (vec (mapcat (fn [[d e]] (repeat e d))
+                                    (refine (factor-map ma) (factor-map mb)))))]
+    (with-hint {:num (:num a) :den (refine (:den a) (:den b))} hs)))
+
+(defn- compare-seqs [cmp xs ys]
+  (let [c (compare (count xs) (count ys))]
+    (if (not= 0 c)
+      c
+      (or (first (remove #{0} (map cmp xs ys))) 0))))
+
+(defn- compare-entries [[e1 p1] [e2 p2]]
+  (let [c (compare e1 e2)]
+    (if (not= 0 c) c (poly/compare-polys p1 p2))))
 
 (defn compare-ratfuns
   "A total, well-founded order: smaller `size` first, then the
-  denominators expanded and the numerators by `bendix.poly/compare-polys`.
-  A lexicographic product of well-founded orders is well-founded, so a
-  class that keeps the smallest form it derives changes finitely often."
+  denominators' `index-key` parts, the numerators by
+  `bendix.poly/compare-polys`, and last the factors themselves, which
+  tells apart two splittings of one function. A lexicographic product
+  of well-founded orders is well-founded, so a class that keeps the
+  smallest form it derives changes finitely often."
   [a b]
   (let [c (compare (size a) (size b))]
     (if (not= 0 c)
       c
-      (let [c (poly/compare-polys (den-poly (:den a)) (den-poly (:den b)))]
-        (if (not= 0 c) c (poly/compare-polys (:num a) (:num b)))))))
+      (let [c (compare-seqs compare-entries (sort-by key (:den (index-key a))) (sort-by key (:den (index-key b))))]
+        (if (not= 0 c)
+          c
+          (let [c (poly/compare-polys (:num a) (:num b))]
+            (if (not= 0 c)
+              c
+              (let [fs #(sort compare-entries (map (fn [[d e]] [e d]) (:den %)))]
+                (compare-seqs compare-entries (fs a) (fs b))))))))))
 
 (defn smaller [a b] (if (pos? (compare-ratfuns a b)) b a))
 
@@ -267,16 +454,6 @@
 ;; ---------------------------------------------------------------------------
 ;; Laurent expansion in one atom
 
-(defn- coefficients-in
-  "The polynomial p as a polynomial in the atom v: a map from v's
-  exponent to the coefficient polynomial in the other atoms."
-  [p v]
-  (reduce-kv (fn [acc m c]
-               (let [k (get m v 0)]
-                 (update acc k (fnil poly/add poly/zero) {(dissoc m v) c})))
-             {}
-             p))
-
 (defn laurent
   "The first n terms of r's Laurent expansion in the atom v, about
   v = ∞ (the default) or v = 0 (`at` :zero): a vector of [k c], c the
@@ -288,10 +465,14 @@
   Empty for zero."
   ([r v n] (laurent r v n :infinity))
   ([r v n at]
+   (when-not (and (integer? n) (<= 0 n))
+     (throw (ex-info "laurent takes a number of terms n ≥ 0" {:n n})))
+   (when-not (#{:infinity :zero} at)
+     (throw (ex-info "laurent expands at :infinity or :zero" {:at at})))
    (if (zero? r)
      []
-     (let [num-c (coefficients-in (:num r) v)
-           den-c (coefficients-in (den-poly (:den r)) v)
+     (let [num-c (poly/coefficients-in (:num r) v)
+           den-c (poly/coefficients-in (den-poly (:den r)) v)
            ;; read the coefficients outward from the leading end: at ∞
            ;; from the top power down, at 0 from the bottom power up
            [pick dir] (if (= at :zero) [min 1] [max -1])

@@ -137,35 +137,27 @@
            under)
          size]))))
 
-(defn materialize
-  "Add the normal form of the class of id as a term and union it in,
-  so extraction can choose it. Returns g'. Opaque atoms render as
-  their cheapest term."
-  [g id]
-  (let [d (an/canonical g (eg/data g id :poly))]
-    (if-not (an/polynomial? d)
-      g
-      (let [best (ex/extractor g)
-            t (poly/->term (an/algebra-of g) d (fn [a] (if (bt/variable? a) a (:term (best a)))))
-            [g nid] (eg/add g t)]
-        (eg/rebuild (first (eg/union g nid id)))))))
-
 (defn materialize-all
-  "Materialize every class's normal form: one extractor for the
-  renderings, every term added, one union each, one rebuild. Adding
-  to a dirty e-graph is what the runner's apply phase does too."
+  "Materialize every class's normal forms, so extraction can choose
+  them: each distinct polynomial form the class's ring nodes compute
+  (`bendix.analysis/forms`), not only the one the class keeps, since
+  the kept form is the smallest under the analysis's order and may
+  render worse under the cost than another (exp(−u)·D(eᵘ) kept over
+  2·a·b, the derivative's soak). One extractor for the renderings,
+  every term added, one union each, one rebuild. Adding to a dirty
+  e-graph is what the runner's apply phase does too."
   [g]
   (let [best (ex/extractor g)
-        render (fn [a] (if (bt/variable? a) a (:term (best a))))]
+        render (fn [a] (if (bt/variable? a) a (:term (best a))))
+        terms (for [r (eg/roots g)
+                    f (an/forms g r)]
+                [r (poly/->term (an/algebra-of g) f render)])]
     (eg/rebuild
-     (reduce (fn [g r]
-               (let [d (an/canonical g (eg/data g r :poly))]
-                 (if-not (an/polynomial? d)
-                   g
-                   (let [[g nid] (eg/add g (poly/->term (an/algebra-of g) d render))]
-                     (first (eg/union g nid r))))))
+     (reduce (fn [g [r t]]
+               (let [[g nid] (eg/add g t)]
+                 (first (eg/union g nid r))))
              g
-             (eg/roots g)))))
+             terms))))
 
 (defn class-data
   "The class of id as the polynomial analysis sees it, as class data

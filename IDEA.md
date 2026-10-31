@@ -711,25 +711,36 @@ with no rule run. A form is the numerator, expanded, over
 a denominator kept as a product of factors: `{:num p :den {d e}}`,
 each `d` non-constant with leading coefficient 1 under a
 multiplicative monomial order (`bendix.poly/leading-term`, degree then
-atoms) and no `d` dividing `p`, which exact division
-(`bendix.poly/divide`) decides. A factor comes from inverting a
-polynomial: its scalar and its monomial content are split off. A
-product remembers its operands' numerators as a hint in metadata,
-which never changes equality, so inverting `(x + y)·(x − y)` written
-as a product gives two factors and not their expansion.
+atoms). Every `d` is squarefree, every two are coprime, and none
+shares a factor with `p`: a multivariate gcd (`bendix.poly/gcd`,
+primitive pseudo-remainder sequences, recursive in the least atom)
+splits factors that share one and cancels what a factor shares with
+the numerator, with exact division (`bendix.poly/divide`) and a
+linear factor's irreducibility as the fast paths. A factor comes from
+inverting a polynomial: its scalar and its monomial content are split
+off. A product remembers its operands' numerators as a hint in
+metadata, which never changes equality, so inverting `(x + y)·(x − y)`
+written as a product gives two factors and not their expansion.
 
-Equal forms are always equal functions. Equal functions have equal
-forms when every denominator factor is irreducible: then the factors
-are coprime and ℚ[atoms] factors uniquely. A reducible factor (the
-expansion of a product, inverted whole) is kept whole, and its form
-can be one of several for the function; the index then misses a
-merge and never makes a wrong one. Factoring would close that gap.
-Until then the analysis is complete for denominators that are products
-of linear forms, and of anything else whose factors arrive as the
-operands of a product.
+Without factoring, how a denominator splits is not unique: `x² − y²`
+inverted whole is one factor, `(x + y)·(x − y)` two. What is unique is
+`rf/index-key`: the numerator, and for each exponent `e` the product
+of the factors raised to `e`. With the factors squarefree and pairwise
+coprime those products are the denominator's squarefree decomposition,
+and the numerator is coprime to the monic denominator, so equal
+functions have equal keys and unequal functions unequal ones. The
+index is keyed by it, so the analysis is complete: every two spellings
+of one rational function merge. When two splittings meet in a class,
+`rf/join` keeps their common refinement (the gcd basis of both factor
+sets, and of both hints), which does not depend on the order they
+arrive in. Expanding per exponent rather than whole keeps `(x + y +
+z + 1)⁻⁸⁰` a small key. Powers, quotients and substitution take the
+`:too-big` limit while they build, so a large power gives up as it
+grows instead of after.
 
 The analysis has the polynomial analysis's shape: data is a form,
-`{:atom id}` for an opaque class, or `:too-big`; `canonical` maps
+`{:atom id}` for an opaque class, `:too-big`, or `:undefined` (a
+denominator since proved zero, which yields to any other data); `canonical` maps
 atoms to roots and replaces an atom whose class now has a form; the
 index merges classes with one form and indexes every form that met in
 a class, its unions journalled with the reason `:ratfun`; the join
@@ -1406,7 +1417,7 @@ built normal-form rules, `pythagoras`, the term seam in the rules,
    analysis (section 4, "The rational-function analysis"). Open: making it
    and the polynomial analysis one analysis, with coefficient algebras
    and exponent laws; rendering its forms as materialized terms, as
-   `materialize` does for polynomials; and the rule sets running under
+   `materialize-all` does for polynomials; and the rule sets running under
    it. The alternatives considered before it existed: the candidate first step is the division bridge,
    `[:/ ?a ?b] = [:* ?a [:expt ?b -1]]` in `powers`, considered and
    deferred while designing `derivative` (2026-09-13): it makes

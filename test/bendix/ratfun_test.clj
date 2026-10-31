@@ -124,9 +124,112 @@
             (prop/for-all [t gen-term, u gen-term]
               (let [f (form t), fu (form u)]
                 (or (not (free? f)) (not (free? fu)) (rf/zero? fu)
-                    (and (= f (form (rf/->term f)))
-                         (= f (form [:/ [:* t u] u]))
-                         (= f (form [:- [:+ t u] u])))))))]
+                    (and (rf/same-function? f (form (rf/->term f)))
+                         (rf/same-function? f (form [:/ [:* t u] u]))
+                         (rf/same-function? f (form [:- [:+ t u] u])))))))]
+    (is (:pass? r) (pr-str (:shrunk r)))))
+
+(defn- form-after
+  "The form of t in an e-graph that already holds the terms before."
+  [before t]
+  (let [g (reduce (fn [g b] (first (eg/add g b))) (ra/egraph) before)
+        [g id] (eg/add g t)]
+    (ra/form (eg/rebuild g) id)))
+
+(deftest a-form-does-not-depend-on-what-came-first
+  (let [t [:/ 1 [:* [:+ :x :y] [:- :x :y]]]
+        alone (form t)
+        after (form-after [[:- [:* :x :x] [:* :y :y]]] t)]
+    (is (= alone after) "the product's factors survive meeting x² − y²")
+    (is (= 2 (count (:den after)))))
+  (testing "spellings of one function whose factors share a root"
+    (is (rf/same-function? (form [:/ 1 [:+ :x :y]]) (form [:/ [:- :x :y] [:- [:* :x :x] [:* :y :y]]])))
+    (is (= (form [:/ 1 [:+ :x :y]]) (form [:/ [:- :x :y] [:- [:* :x :x] [:* :y :y]]])) "cancelled by the gcd")
+    (let [g (ra/egraph)
+          [g a] (eg/add g [:/ 1 [:- [:/ :x :y] [:/ :y :x]]])
+          [g b] (eg/add g [:/ [:* :x :y] [:* [:- :x :y] [:+ :x :y]]])
+          g (eg/rebuild g)]
+      (is (= (eg/find g a) (eg/find g b)) "the index merges them")
+      (is (nil? (ra/inconsistency g))))))
+
+(deftest property-equal-keys-are-equal-functions
+  (let [r (tc/quick-check 200
+            (prop/for-all [t gen-term, u gen-term]
+              (let [f (form t), fu (form u)]
+                ;; sound: equal keys mean equal values wherever both are defined
+                (or (not (free? f)) (not (free? fu))
+                    (not (rf/same-function? f fu))
+                    (every? (fn [env]
+                              (let [v (rf/evaluate f env), w (rf/evaluate fu env)]
+                                (or (nil? v) (nil? w) (= v w))))
+                            points)))))]
+    (is (:pass? r) (pr-str (:shrunk r)))))
+
+(deftest joining-two-splittings
+  (let [x (rf/variable :x) y (rf/variable :y)
+        a (rf/inverse (rf/sub (rf/mul x x) (rf/mul y y)))
+        b (rf/inverse (rf/mul (rf/add x y) (rf/sub x y)))]
+    (is (rf/same-function? a b))
+    (is (not= a b))
+    (is (= (rf/join a b) (rf/join b a) b) "the finer splitting, either way round")
+    (is (not= 0 (rf/compare-ratfuns a b)) "the order tells the splittings apart")
+    (is (= (rf/smaller a b) (rf/smaller b a)))))
+
+(deftest a-denominator-proved-zero-is-not-too-big
+  (let [g (ra/egraph)
+        [g id] (eg/add g [:/ 1 [:- :x :y]])
+        [g x] (eg/add g :x)
+        [g y] (eg/add g :y)
+        [g _] (eg/union g x y)
+        g (eg/rebuild g)]
+    (is (ra/atom? (ra/form g id)) "a division by zero: opaque, and free to take a definition later")))
+
+(deftest a-large-power-gives-up-early
+  (let [g (ra/egraph)
+        [g id] (eg/add g [:expt [:+ :x :y :z 1] 80])
+        t0 (System/currentTimeMillis)
+        g (eg/rebuild g)]
+    (is (= :too-big (ra/form g id)))
+    (is (< (- (System/currentTimeMillis) t0) 10000))))
+
+;; ---------------------------------------------------------------------------
+;; division and gcd, against products built to have them
+
+(def gen-poly
+  (gen/fmap (fn [terms] (reduce p/add p/zero (map (fn [[m c]] {m c}) terms)))
+            (gen/vector (gen/tuple (gen/fmap #(into {} (remove (comp zero? val)) %)
+                                             (gen/map (gen/elements [:x :y :z]) (gen/choose 0 2)))
+                                   (gen/elements [-3 -2 -1 1 2 3 1/2]))
+                        1 3)))
+
+(deftest property-division-undoes-multiplication
+  (let [r (tc/quick-check 200
+            (prop/for-all [a gen-poly, b gen-poly]
+              (or (empty? b)
+                  (and (= a (p/divide (p/mul a b) b))
+                       (or (p/constant? b) (empty? a)
+                           (nil? (p/divide (p/add (p/mul a b) (p/constant 1)) b))
+                           (some? (p/divide (p/constant 1) b)))))))]
+    (is (:pass? r) (pr-str (:shrunk r)))))
+
+(deftest property-the-gcd-divides-and-is-greatest
+  (let [r (tc/quick-check 150
+            (prop/for-all [a gen-poly, b gen-poly, c gen-poly]
+              (or (empty? c) (empty? a) (empty? b)
+                  (let [g (p/gcd (p/mul a c) (p/mul b c))]
+                    (and (some? (p/divide (p/mul a c) g))
+                         (some? (p/divide (p/mul b c) g))
+                         (some? (p/divide g (p/monic c)))
+                         (= 1 (p/leading-coefficient g)))))))]
+    (is (:pass? r) (pr-str (:shrunk r)))))
+
+(deftest the-leading-term-is-multiplicative
+  (let [r (tc/quick-check 200
+            (prop/for-all [a gen-poly, b gen-poly]
+              (or (empty? a) (empty? b)
+                  (= (p/leading-term (p/mul a b))
+                     (let [[ma ca] (p/leading-term a), [mb cb] (p/leading-term b)]
+                       [(merge-with + ma mb) (num/mul ca cb)])))))]
     (is (:pass? r) (pr-str (:shrunk r)))))
 
 ;; ---------------------------------------------------------------------------
@@ -155,6 +258,9 @@
     (testing "a coefficient that is itself a rational function: d/(x·d + 1) → 1/x − 1/(x²d)"
       (is (= [[0 (rf/inverse x)] [-1 (rf/neg (rf/inverse (rf/mul x x)))]]
              (rf/laurent (rf/div d (rf/add (rf/mul x d) rf/one)) :d 2))))
+    (testing "a bad n or point is refused, not looped on"
+      (is (thrown? clojure.lang.ExceptionInfo (rf/laurent x :x -1)))
+      (is (thrown? clojure.lang.ExceptionInfo (rf/laurent x :x 2 :inf))))
     (testing "zero has no terms"
       (is (= [] (rf/laurent rf/zero :d 3)))
       (is (nil? (rf/leading rf/zero :d))))

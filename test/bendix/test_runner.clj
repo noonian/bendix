@@ -14,15 +14,9 @@
             [bendix.smoke-test]))
 
 (defn -main [& _]
-  (let [{:keys [fail error]} (t/run-tests 'bendix.num-test
-                                          'bendix.algebra-test
-                                          'bendix.exponent-test
-                                          'bendix.poly-test
-                                          'bendix.ratfun-test
-                                          'bendix.term-test
-                                          'bendix.analysis-test
-                                          'bendix.core-test
-                                          'bendix.rules-test
-                                          'bendix.derivative-test
-                                          'bendix.smoke-test)]
+  ;; every required namespace whose name ends in -test, so one list
+  ;; above is the whole suite
+  (let [{:keys [fail error]} (apply t/run-tests
+                                    (sort-by str (filter #(re-matches #"bendix\..*-test" (str %))
+                                                         (map ns-name (all-ns)))))]
     (System/exit (if (pos? (+ fail error)) 1 0))))

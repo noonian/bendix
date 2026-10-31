@@ -363,10 +363,11 @@
 
 (defn divide
   "p / q when q divides p exactly in the free polynomial ring, else nil.
-  Rational coefficients (a field) only. Division by one polynomial
+  Complete over a field such as ℚ, the default. Division by one polynomial
   decides divisibility: if q divides p, the leading term of q divides
   the leading term of every remainder, so the first one it does not
-  divide is a proof that q does not divide p. Division by zero is nil."
+  divide is a proof that q does not divide p. Division by zero is nil,
+  and so is a coefficient the algebra cannot divide."
   ([p q] (divide alg/rational p q))
   ([algebra p q]
    (cond
@@ -375,9 +376,9 @@
      (= 1 (count q))
      (let [[mq cq] (first q)]
        (reduce-kv (fn [acc m c]
-                    (if-let [m' (monomial-quotient m mq)]
-                      (assoc acc m' (alg/div algebra c cq))
-                      (reduced nil)))
+                    (let [m' (monomial-quotient m mq)
+                          c' (when m' (alg/div algebra c cq))]
+                      (if c' (assoc acc m' c') (reduced nil))))
                   zero
                   p))
      :else
@@ -386,10 +387,101 @@
          (if (empty? r)
            quotient
            (let [[mr cr] (leading-term r)]
-             (if-let [m' (monomial-quotient mr mq)]
-               (let [t {m' (alg/div algebra cr cq)}]
-                 (recur (sub algebra r (mul algebra t q)) (add algebra quotient t)))
+             (if-let [c' (when-let [m' (monomial-quotient mr mq)]
+                           (when-let [c' (alg/div algebra cr cq)] {m' c'}))]
+               (recur (sub algebra r (mul algebra c' q)) (add algebra quotient c'))
                nil))))))))
+
+(defn monic
+  "p scaled so its leading coefficient (`leading-term`) is 1. Rational
+  coefficients only. Zero stays zero."
+  [p]
+  (if (empty? p) p (scale p (num/div 1 (leading-coefficient p)))))
+
+;; ---------------------------------------------------------------------------
+;; greatest common divisor
+
+(defn degree-in
+  "The degree of p in the atom v; -1 for zero."
+  [p v]
+  (reduce max -1 (map #(get (key %) v 0) p)))
+
+(defn coefficients-in
+  "p as a polynomial in the atom v: a map from v's exponent to the
+  coefficient, a polynomial in the other atoms."
+  [p v]
+  (reduce-kv (fn [acc m c]
+               (let [k (get m v 0)]
+                 (update acc k (fnil add zero) {(dissoc m v) c})))
+             {}
+             p))
+
+(defn- v-power [v k] (if (zero? k) {{} 1} {{v k} 1}))
+
+(defn- pseudo-remainder
+  "a modulo b as polynomials in v, up to a non-zero factor free of v:
+  the leading term in v cancelled by cross-multiplying until the
+  degree in v falls below b's."
+  [a b v]
+  (let [db (degree-in b v)
+        lb (get (coefficients-in b v) db)]
+    (loop [r a]
+      (let [dr (degree-in r v)]
+        (if (< dr db)
+          r
+          (let [lr (get (coefficients-in r v) dr)]
+            (recur (sub (mul lb r) (mul (mul lr (v-power v (- dr db))) b)))))))))
+
+(declare gcd)
+
+(defn- content-in
+  "The gcd of p's coefficients as a polynomial in v."
+  [p v]
+  (reduce (fn [g c] (let [g (gcd g c)] (if (= g {{} 1}) (reduced g) g)))
+          zero
+          (vals (coefficients-in p v))))
+
+(defn gcd
+  "The greatest common divisor of p and q in the free ring ℚ[atoms],
+  with leading coefficient 1 (`monic`); zero only when both are.
+  Rational coefficients only. Recursive in the least atom: the
+  contents' gcd times the primitive pseudo-remainder sequence's last
+  non-zero term, which is exact over ℚ[other atoms] by Gauss's lemma."
+  [p q]
+  (cond
+    (empty? p) (monic q)
+    (empty? q) (monic p)
+    (or (constant? p) (constant? q)) (constant 1)
+    (= p q) (monic p)
+    :else
+    (let [v (first (sort-by atom-key (into (atoms p) (atoms q))))]
+      (cond
+        (zero? (degree-in p v)) (gcd p (content-in q v))
+        (zero? (degree-in q v)) (gcd (content-in p v) q)
+        :else
+        (let [cp (content-in p v)
+              cq (content-in q v)
+              c (gcd cp cq)
+              ;; each remainder made primitive in v and monic, so its
+              ;; coefficients stay as small as the sequence allows
+              g (loop [a (monic (divide p cp)), b (monic (divide q cq))]
+                  (let [[a b] (if (< (degree-in a v) (degree-in b v)) [b a] [a b])
+                        r (pseudo-remainder a b v)]
+                    (cond (empty? r) b
+                          (zero? (degree-in r v)) nil
+                          :else (recur b (monic (divide r (content-in r v)))))))]
+          (monic (if g (mul c g) c)))))))
+
+(defn coprime?
+  "Do p and q share no non-constant factor? Cheap when one of them is
+  linear or their atoms are disjoint."
+  [p q]
+  (cond
+    (or (constant? p) (constant? q)) true
+    (empty? (filter (atoms p) (atoms q))) true
+    (= 1 (degree p)) (nil? (divide q p))
+    (= 1 (degree q)) (nil? (divide p q))
+    :else (constant? (gcd p q))))
 
 (defn smaller
   "The smaller of p and q under `compare-polys`."

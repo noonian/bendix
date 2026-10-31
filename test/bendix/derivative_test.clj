@@ -225,6 +225,12 @@
                (agrees-with-the-reference? t env rules/exp-log)))]
     (is (:pass? res) (pr-str res))))
 
+(deftest a-derivative-is-its-own-simplification
+  ;; the class kept exp(−u)·D(eᵘ) as its polynomial form, so only that
+  ;; was materialized and 2·a·b, computed by another node, never was:
+  ;; simplifying the result again found the cheaper spelling
+  (is (agrees-with-the-reference? [:log [:exp [:expt [:expt [:+ :x :x] -1] -1]]] {:x 0 :y 0} rules/exp-log)))
+
 (deftest derivative-is-ring-consistent-at-saturation
   ;; every form the rules propose agrees in the ring with every other
   ;; in its class once every :D is resolved, so the polynomial oracle

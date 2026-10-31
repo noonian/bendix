@@ -72,7 +72,8 @@ forms, so every arrangement of a sum is one class and no associativity
 or commutativity rule ever fires. An equation the ring cannot prove
 but the e-graph asserts is used when it determines an atom (a = 2a + 1
 makes a = −1), reported as a contradiction when it is one (x = x + 1),
-and otherwise kept as an assumption. Everything outside the ring is a
+and otherwise kept in the class as a second form (reporting such
+assumptions in `simplify`'s `:assuming` is not built yet). Everything outside the ring is a
 rule: `(simplify t {:rules [...]})` takes cromulent rewrites, and
 `:dev? true` checks the normal forms after every rule application and
 throws naming the first unsound rule. `bendix.rules/trig` holds the
@@ -113,9 +114,12 @@ from without a rule:
 ;; => true
 ```
 
-Equal forms are always equal functions; equal functions reach equal
-forms whenever the denominator factors are irreducible (IDEA.md
-section 4, "The rational-function analysis").
+Equal functions always share an index key (`rf/index-key`: the
+numerator and the denominator's squarefree parts, kept coprime by a
+polynomial gcd), so the index merges every two spellings of one
+rational function; how the denominator splits into factors can differ
+between spellings, and `rf/join` refines two splittings into one
+(IDEA.md section 4, "The rational-function analysis").
 
 ## Running
 
