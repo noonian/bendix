@@ -1454,7 +1454,10 @@ in ClojureScript too:
 - `bendix.ratfun` and `bendix.ratfun-analysis`: rational functions
   in a normal form, and the analysis that carries and indexes them
   (section 4, "The rational-function analysis"); exact division and a
-  multiplicative leading term in `bendix.poly`.
+  multiplicative leading term in `bendix.poly`; Laurent expansion in
+  one atom about ∞ or 0 (`laurent`, `leading`), coefficients rational
+  functions of the other atoms, for ribbon's limits of shifted
+  amplitudes.
 - `bendix.rules`: normal-form rules (`normal-form-rule`, `render`) and
   the rule sets that ship (section 3): `trig` (`pythagoras`),
   `powers` (`combine-powers`), `exp-log` (its unconditional half,

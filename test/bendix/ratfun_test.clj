@@ -128,3 +128,47 @@
                          (= f (form [:/ [:* t u] u]))
                          (= f (form [:- [:+ t u] u])))))))]
     (is (:pass? r) (pr-str (:shrunk r)))))
+
+;; ---------------------------------------------------------------------------
+;; Laurent expansion
+
+(defn- v-power [v k] (rf/expt (rf/variable v) k))
+
+(defn- truncation-error
+  "r minus its first n Laurent terms in v."
+  [r v n at]
+  (reduce (fn [acc [k c]] (rf/sub acc (rf/mul c (v-power v k)))) r (rf/laurent r v n at)))
+
+(deftest laurent-expansion
+  (let [x (rf/variable :x) y (rf/variable :y) d (rf/variable :d)
+        c (fn [k] (rf/constant k))]
+    (testing "1/(x − d) + 1/(y + d) at d = ∞: −(x + y)/d² + (y² − x²)/d³ + …"
+      (let [r (rf/add (rf/inverse (rf/sub x d)) (rf/inverse (rf/add y d)))]
+        (is (= [[-2 (rf/neg (rf/add x y))]
+                [-3 (rf/sub (rf/mul y y) (rf/mul x x))]]
+               (rf/laurent r :d 2)))
+        (is (= [-2 (rf/neg (rf/add x y))] (rf/leading r :d)))))
+    (testing "1/(1 − d) at d = 0: 1 + d + d² + …"
+      (is (= [[0 rf/one] [1 rf/one] [2 rf/one]] (rf/laurent (rf/inverse (rf/sub rf/one d)) :d 3 :zero))))
+    (testing "a pole at d = 0: (d² + x)/d is x/d + d"
+      (is (= [[-1 x] [0 rf/zero] [1 rf/one]] (rf/laurent (rf/div (rf/add (rf/mul d d) x) d) :d 3 :zero))))
+    (testing "a coefficient that is itself a rational function: d/(x·d + 1) → 1/x − 1/(x²d)"
+      (is (= [[0 (rf/inverse x)] [-1 (rf/neg (rf/inverse (rf/mul x x)))]]
+             (rf/laurent (rf/div d (rf/add (rf/mul x d) rf/one)) :d 2))))
+    (testing "zero has no terms"
+      (is (= [] (rf/laurent rf/zero :d 3)))
+      (is (nil? (rf/leading rf/zero :d))))
+    (testing "what is left after n terms is of lower order than the last term kept"
+      (doseq [r [(rf/div (rf/add (rf/mul d (rf/mul d d)) (rf/mul x y)) (rf/mul (rf/sub d x) (rf/add d (c 2))))
+                 (rf/div (rf/sub (rf/mul x d) y) (rf/mul (rf/add (rf/mul d d) x) (rf/sub d y)))
+                 (rf/add (rf/inverse (rf/sub x d)) (rf/inverse (rf/add (rf/mul (c 3) d) y)))
+                 (rf/div (rf/add x d) (rf/mul (rf/mul d d) (rf/add rf/one (rf/mul y d))))]
+              [at n] [[:infinity 4] [:zero 4]]
+              :let [terms (rf/laurent r :d n at)
+                    last-k (first (peek terms))
+                    rest-r (truncation-error r :d n at)]]
+        (is (or (rf/zero? rest-r)
+                (if (= at :zero)
+                  (< last-k (first (rf/leading rest-r :d :zero)))
+                  (> last-k (first (rf/leading rest-r :d)))))
+            (str at " " r))))))

@@ -263,3 +263,54 @@
        0 n
        1 [:/ n (ds 0)]
        [:/ n (into [:*] ds)]))))
+
+;; ---------------------------------------------------------------------------
+;; Laurent expansion in one atom
+
+(defn- coefficients-in
+  "The polynomial p as a polynomial in the atom v: a map from v's
+  exponent to the coefficient polynomial in the other atoms."
+  [p v]
+  (reduce-kv (fn [acc m c]
+               (let [k (get m v 0)]
+                 (update acc k (fnil poly/add poly/zero) {(dissoc m v) c})))
+             {}
+             p))
+
+(defn laurent
+  "The first n terms of r's Laurent expansion in the atom v, about
+  v = ∞ (the default) or v = 0 (`at` :zero): a vector of [k c], c the
+  coefficient of v^k, a rational function of the other atoms, with k
+  falling from the leading power at ∞ and rising from the lowest at 0.
+  The first entry is the leading term and is never zero; later
+  coefficients may be. Exact: the expansion is series division of the
+  numerator by the denominator, both written as polynomials in v.
+  Empty for zero."
+  ([r v n] (laurent r v n :infinity))
+  ([r v n at]
+   (if (zero? r)
+     []
+     (let [num-c (coefficients-in (:num r) v)
+           den-c (coefficients-in (den-poly (:den r)) v)
+           ;; read the coefficients outward from the leading end: at ∞
+           ;; from the top power down, at 0 from the bottom power up
+           [pick dir] (if (= at :zero) [min 1] [max -1])
+           a (reduce pick (keys num-c))
+           b (reduce pick (keys den-c))
+           nth-num (fn [i] (from-poly (get num-c (+ a (* dir i)) poly/zero)))
+           nth-den (fn [j] (from-poly (get den-c (+ b (* dir j)) poly/zero)))
+           lead (nth-den 0)]
+       (loop [k 0, cs []]
+         (if (= k n)
+           (vec (map-indexed (fn [i c] [(+ (- a b) (* dir i)) c]) cs))
+           (let [c (div (reduce (fn [acc j] (sub acc (mul (nth-den j) (nth cs (- k j)))))
+                                (nth-num k)
+                                (range 1 (inc k)))
+                        lead)]
+             (recur (inc k) (conj cs c)))))))))
+
+(defn leading
+  "[k c]: the leading power of the atom v in r at v = ∞ (or at v = 0
+  with `at` :zero) and its coefficient; nil for zero."
+  ([r v] (leading r v :infinity))
+  ([r v at] (first (laurent r v 1 at))))
