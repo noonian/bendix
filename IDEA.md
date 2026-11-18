@@ -1478,7 +1478,15 @@ in ClojureScript too:
   `serialize` for the egraph-serialize export.
 - `bendix.term`, the CAS's vocabulary over `cromulent.term`;
   `bendix.num`, the numeric seam for ClojureScript (README,
-  Portability); `bendix.smoke`, the cross-runtime facts.
+  Portability). Since 2026-11-17 it goes past 2^53 with native
+  BigInts instead of throwing: an operation is tried in numbers first,
+  as before, and only one that would pass 2^53 takes BigInts, so a
+  value that fits keeps its old representation and hash. Checked on
+  node with ClojureScript 1.12.145: 400 chained operations, values to
+  1600 digits, agree with the JVM line for line; and the self-test
+  facts of cromulent, bendix, orrery and snail-crawl (218) give the
+  same results and the same actual values with the old and the new
+  `bendix.num`, in about the same time; `bendix.smoke`, the cross-runtime facts.
 
 Every rule set is tested by properties against a numeric oracle
 (value preserved where defined, never grows, cost a fixpoint, graph

@@ -138,10 +138,13 @@ The source namespaces, all but the JVM-only `bendix.algebra64`, are
 `.cljc` and compile under ClojureScript
 too ([orrery](https://github.com/noonian/orrery) runs them in the
 browser). `bendix.num` is the one seam: exact rational arithmetic that
-is Clojure's own on the JVM and Jolt, and in ClojureScript a `Ratio`
-type for non-integer rationals with integers kept within 2^53 (an
-operation past it throws), plus `read-string`, the EDN reader with
-`1/2` exact on every runtime. `bendix.smoke` (`src/`) is a table of
+is Clojure's own on the JVM and Jolt, and in ClojureScript safe
+integers as JavaScript numbers and a `Ratio` type for the rest, whose
+fields are numbers while they fit in 2^53 and native BigInts past it
+(an integer past 2^53 is a `Ratio` with denominator 1), plus
+`read-string`, the EDN reader with `1/2` and long integers exact on
+every runtime. Every operation tries numbers first, so what fits in
+2^53 is computed exactly as before BigInts. `bendix.smoke` (`src/`) is a table of
 results, counts and costs that must agree on all three runtimes;
 `bendix.smoke-test` asserts it here, and orrery's `npm run smoke` on
 node.
